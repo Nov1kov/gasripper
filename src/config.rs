@@ -12,9 +12,7 @@
 //! ```text
 //! # comment
 //! [features]
-//! math = true
-//! abi = false
-//! assert = true
+//! guards = true
 //! ```
 //! Section headers (`[...]`) and comments (`#`) are ignored; lines of the form
 //! `key = true|false` are meaningful.
@@ -105,25 +103,23 @@ mod tests {
     #[test]
     fn defaults_all_on() {
         let c = FeatureConfig::defaults();
-        assert!(c.is_enabled("math") && c.is_enabled("abi") && c.is_enabled("assert"));
-        assert_eq!(c.enabled_categories().len(), 3);
+        assert!(c.is_enabled("guards"), "the guards feature must default to enabled");
+        assert_eq!(c.enabled_categories().len(), 1, "exactly one category must be enabled by default");
     }
 
     #[test]
     fn file_overrides_defaults() {
         let mut c = FeatureConfig::defaults();
-        c.apply_file("[features]\nmath = false\n# abi stays\nassert = off\n").unwrap();
-        assert!(!c.is_enabled("math"));
-        assert!(c.is_enabled("abi"));
-        assert!(!c.is_enabled("assert"));
+        c.apply_file("[features]\nguards = false\n").unwrap();
+        assert!(!c.is_enabled("guards"), "a config file must be able to disable the feature");
     }
 
     #[test]
     fn cli_overrides_file() {
         let mut c = FeatureConfig::defaults();
-        c.apply_file("math = false\n").unwrap();
-        c.enable("math").unwrap();
-        assert!(c.is_enabled("math"));
+        c.apply_file("guards = false\n").unwrap();
+        c.enable("guards").unwrap();
+        assert!(c.is_enabled("guards"), "a CLI enable must override the config file");
     }
 
     #[test]

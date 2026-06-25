@@ -12,9 +12,7 @@ use crate::core::Category;
 
 #[cfg(test)]
 pub mod e2e_harness;
-pub mod strip_abi;
-pub mod strip_assert;
-pub mod strip_math;
+pub mod guards;
 
 /// Feature metadata for the registry, CLI, and config.
 #[derive(Clone, Copy, Debug)]
@@ -33,7 +31,7 @@ pub struct FeatureMeta {
 
 /// The full registry of available features.
 pub fn registry() -> Vec<FeatureMeta> {
-    vec![strip_math::META, strip_abi::META, strip_assert::META]
+    vec![guards::META]
 }
 
 /// Find a feature's metadata by key.

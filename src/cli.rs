@@ -3,7 +3,6 @@
 //! By default (only an input path given) the tool enables ALL features and prints
 //! a report of what would be stripped. The config file and any flags are optional.
 
-use std::collections::HashMap;
 use std::fs;
 
 use clap::{CommandFactory, Parser};
@@ -12,19 +11,15 @@ use tracing_subscriber::EnvFilter;
 use crate::config::FeatureConfig;
 use crate::core::asm::render;
 use crate::core::bytecode::{assemble, bytes_to_hex};
-use crate::core::{Category, Span, strip_guards};
+use crate::core::{Span, strip_guards};
 use crate::features;
 use crate::input::{self, InputKind, Loaded};
 use crate::sidecar::{Backend, Lang};
 
 const AFTER_HELP: &str = "\
 FEATURES (all enabled by default):
-    math    — strip overflow/underflow and arithmetic revert guards
-    abi     — strip ABI/calldata bounds checks
-    assert  — strip other range/cast assert checks
-
-ALWAYS preserved: authorization (CALLER/ORIGIN), any side effects, and checks that
-consume their own input.";
+    guards  — strip provably-safe revert guards (overflow/underflow, calldata
+              bounds, range/cast asserts)";
 
 /// Super-aggressive gas optimizer for EVM bytecode/assembly.
 #[derive(Parser, Debug)]
@@ -66,7 +61,7 @@ struct Cli {
     #[arg(long = "emit-bytecode", value_name = "path")]
     emit_bytecode: Option<String>,
 
-    /// write optimized creation bytecode (hex; Vyper source only)
+    /// write optimized creation bytecode hex
     #[arg(long = "emit-creation", value_name = "path")]
     emit_creation: Option<String>,
 
@@ -98,13 +93,10 @@ pub fn run() -> i32 {
         println!();
         return 0;
     }
-    match run_inner(Cli::parse()) {
-        Ok(code) => code,
-        Err(e) => {
-            tracing::error!("{e}");
-            1
-        }
-    }
+    run_inner(Cli::parse()).unwrap_or_else(|e| {
+        tracing::error!("{e}");
+        1
+    })
 }
 
 fn run_inner(cli: Cli) -> Result<i32, String> {
@@ -141,7 +133,7 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
     let enabled = config.enabled_categories();
     let (optimized, spans) = strip_guards(&loaded.instrs, &enabled);
 
-    print_report(&loaded, &spans, &config);
+    print_report(&loaded, &spans, &config, cli.emit_asm.is_some());
 
     // Emission (if requested). --report does not block writing, but without emit
     // flags we just print the report.
@@ -220,20 +212,11 @@ fn emit_creation(
     Ok(0)
 }
 
-/// Print a per-category summary and a few sample stripped ranges.
+/// Print the strip count and a few sample stripped ranges.
 fn print_span_summary(spans: &[Span], instrs: &[crate::core::Instr]) {
     println!("checks to strip: {}", spans.len());
     if spans.is_empty() {
         return;
-    }
-    let mut by_cat: HashMap<Category, usize> = HashMap::new();
-    for s in spans {
-        *by_cat.entry(s.category).or_insert(0) += 1;
-    }
-    for cat in [Category::Abi, Category::Math, Category::Assert] {
-        if let Some(n) = by_cat.get(&cat) {
-            println!("  {:8}: {n}", cat.key());
-        }
     }
     println!("\nsample stripped ranges:");
     for s in spans.iter().take(5) {
@@ -249,7 +232,7 @@ fn print_features() {
     }
 }
 
-fn print_report(loaded: &Loaded, spans: &[Span], config: &FeatureConfig) {
+fn print_report(loaded: &Loaded, spans: &[Span], config: &FeatureConfig, emitting_asm: bool) {
     println!("source: {}", loaded.kind);
     println!("input instructions: {}", loaded.instrs.len());
 
@@ -264,15 +247,6 @@ fn print_report(loaded: &Loaded, spans: &[Span], config: &FeatureConfig) {
     if spans.is_empty() {
         return;
     }
-    let mut by_cat: HashMap<Category, usize> = HashMap::new();
-    for s in spans {
-        *by_cat.entry(s.category).or_insert(0) += 1;
-    }
-    for cat in [Category::Abi, Category::Math, Category::Assert] {
-        if let Some(n) = by_cat.get(&cat) {
-            println!("  {:8}: {n}", cat.key());
-        }
-    }
 
     // Show the first few stripped ranges as mnemonics.
     println!("\nsample stripped ranges:");
@@ -284,7 +258,7 @@ fn print_report(loaded: &Loaded, spans: &[Span], config: &FeatureConfig) {
         println!("  [{}..{}] {} -> {}", s.start, s.end, s.category.key(), seq.join(" "));
     }
 
-    if loaded.symbolic {
+    if loaded.symbolic && !emitting_asm {
         println!(
             "\nnote: input is symbolic — final bytecode requires linking; \
              use --emit-asm for the optimized assembly."
@@ -298,9 +272,9 @@ mod tests {
 
     #[test]
     fn parse_basic_args() {
-        let c = Cli::try_parse_from(["gasripper", "--disable", "math,abi", "in.asm"]).unwrap();
+        let c = Cli::try_parse_from(["gasripper", "--disable", "guards,extra", "in.asm"]).unwrap();
         assert_eq!(c.input.as_deref(), Some("in.asm"), "positional input was not captured");
-        assert_eq!(c.disable, vec!["math", "abi"], "comma list was not split into features");
+        assert_eq!(c.disable, vec!["guards", "extra"], "comma list was not split into features");
     }
 
     #[test]
@@ -313,9 +287,9 @@ mod tests {
 
     #[test]
     fn repeated_disable_accumulates() {
-        let c = Cli::try_parse_from(["gasripper", "--disable", "math", "--disable", "assert", "in.asm"])
+        let c = Cli::try_parse_from(["gasripper", "--disable", "guards", "--disable", "extra", "in.asm"])
             .unwrap();
-        assert_eq!(c.disable, vec!["math", "assert"], "repeated --disable flags did not accumulate");
+        assert_eq!(c.disable, vec!["guards", "extra"], "repeated --disable flags did not accumulate");
     }
 
     #[test]

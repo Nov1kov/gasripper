@@ -1,10 +1,9 @@
 //! The engine for stripping provably-safe revert guards.
 //!
-//! Port of `strip` / `is_revert_jumpi` / `category` from Python with one
-//! addition: removal is gated by the set of enabled categories (`Category`). This
-//! lets each feature (`features::strip_*`) control which class of checks to strip.
+//! Port of `strip` / `is_revert_jumpi` from Python with one addition: removal is
+//! gated by the enabled set (`Category`), so the `guards` feature can be turned off.
 //!
-//! What is ALWAYS preserved (even if the category is enabled):
+//! What is ALWAYS preserved (even when the feature is enabled):
 //!   * authorization — any `run` with `CALLER`/`ORIGIN` (`msg.sender == owner`);
 //!   * side effects — `SSTORE`/`CALL`/`MSTORE`/`LOG*`/... and terminals;
 //!   * checks that consume their own input (not a stack identity).
@@ -17,25 +16,21 @@ use super::stack::strip_residue;
 /// Maximum length of the suffix analyzed before a revert JUMPI.
 const WINDOW: i64 = 48;
 
-/// The class of a strippable check. Each feature owns one category.
+/// The class of a strippable check. A single category: every provably-safe revert
+/// guard is one and the same removal. (The former `abi`/`math`/`assert` split was a
+/// fragile opcode-sniffing label — the same calldata bounds check landed in different
+/// classes across compiler codegen — so it was merged into one honest feature.)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Category {
-    /// ABI/calldata bounds: `CALLDATALOAD`/`CALLDATASIZE ... revert`.
-    Abi,
-    /// Overflow/underflow and other arithmetic: `ADD/SUB/MUL/... ... revert`.
-    Math,
-    /// Range/cast/other asserts not classified as abi/math.
-    Assert,
+    /// Any provably-safe revert guard.
+    Guard,
 }
 
 impl Category {
     /// A stable key for the CLI/config.
+    #[inline]
     pub fn key(self) -> &'static str {
-        match self {
-            Category::Abi => "abi",
-            Category::Math => "math",
-            Category::Assert => "assert",
-        }
+        "guards"
     }
 }
 
@@ -70,6 +65,11 @@ fn is_ctrl(m: &str) -> bool {
     matches!(m, "JUMP" | "JUMPI")
 }
 
+/// Opcode that halts execution: code before it cannot fall through to what follows.
+fn is_terminal(m: &str) -> bool {
+    matches!(m, "RETURN" | "REVERT" | "STOP" | "INVALID" | "SELFDESTRUCT")
+}
+
 /// `instr[i]` is a push of a revert label, followed by `JUMPI` (a conditional revert).
 fn is_revert_jumpi(instrs: &[Instr], i: usize) -> bool {
     let a = &instrs[i];
@@ -77,29 +77,6 @@ fn is_revert_jumpi(instrs: &[Instr], i: usize) -> bool {
     a.kind == Kind::PushSym
         && a.mnem().to_lowercase().contains("revert")
         && matches!(b, Some(x) if x.kind == Kind::Op && x.mnem() == "JUMPI")
-}
-
-/// Classify a strippable check by its opcode composition.
-pub fn category(run: &[Instr]) -> Category {
-    let mut has_abi = false;
-    let mut has_math = false;
-    for x in run {
-        if x.kind != Kind::Op {
-            continue;
-        }
-        match x.mnem() {
-            "CALLDATALOAD" | "CALLDATASIZE" => has_abi = true,
-            "ADD" | "SUB" | "MUL" | "DIV" | "MOD" | "EXP" | "SHL" => has_math = true,
-            _ => {}
-        }
-    }
-    if has_abi {
-        Category::Abi
-    } else if has_math {
-        Category::Math
-    } else {
-        Category::Assert
-    }
 }
 
 /// The straight-line block before `start` (back to the nearest label) is free of auth
@@ -110,6 +87,12 @@ pub fn category(run: &[Instr]) -> Category {
 /// or from a side effect (e.g. a `CALL`'s success flag — would ignore a failed call).
 /// We conservatively refuse such a strip when its block contains either. Pure-identity
 /// strips drop nothing and are always safe, so they bypass this check.
+///
+/// The scan stops at a `Kind::Label` or a terminal opcode ([`is_terminal`]): both end
+/// the straight-line region reaching `start`. Stopping at a terminal matters for whole
+/// programs — a compiler's deploy preamble (ending in `RETURN`) precedes the runtime
+/// body with no intervening `JUMPDEST`, and its side effects (`CODECOPY`/`RETURN`) run
+/// at deploy time, never feeding the runtime call stack.
 fn block_clean_for_residue(instrs: &[Instr], start: usize) -> bool {
     let mut i = start;
     while i > 0 {
@@ -119,6 +102,9 @@ fn block_clean_for_residue(instrs: &[Instr], start: usize) -> bool {
         }
         if instrs[i].kind == Kind::Op {
             let m = instrs[i].mnem();
+            if is_terminal(m) {
+                break;
+            }
             if is_auth(m) || is_side(m) {
                 return false;
             }
@@ -182,9 +168,8 @@ pub fn strip_guards(instrs: &[Instr], enabled: &HashSet<Category>) -> (Vec<Instr
             }
 
             if let Some((f, rep)) = best {
-                let cat = category(&instrs[f..=j]);
-                if enabled.contains(&cat) {
-                    spans.push(Span { start: f, end: j, category: cat, replacement: rep });
+                if enabled.contains(&Category::Guard) {
+                    spans.push(Span { start: f, end: j, category: Category::Guard, replacement: rep });
                 }
             }
         }
@@ -217,10 +202,10 @@ fn apply_spans(instrs: &[Instr], spans: &[Span]) -> Vec<Instr> {
     out
 }
 
-/// Convenience shortcut: all three categories enabled.
+/// Convenience shortcut: the strip feature enabled.
 #[allow(dead_code)] // used in tests; a useful public helper
 pub fn all_categories() -> HashSet<Category> {
-    [Category::Abi, Category::Math, Category::Assert].into_iter().collect()
+    [Category::Guard].into_iter().collect()
 }
 
 #[cfg(test)]
@@ -266,12 +251,29 @@ mod tests {
     }
 
     #[test]
-    fn category_gating_disables_removal() {
-        // The same overflow check is not stripped if the math category is disabled.
+    fn residue_strip_not_blocked_by_preceding_terminal() {
+        // A consuming overflow guard (residue SWAP1/POP) in the runtime block, with a
+        // deploy preamble ending in RETURN before it. A terminal halts execution, so
+        // code before it cannot leave a live value on this block's stack and must not
+        // block the residue strip. Reproduces a real Vyper `a + b` program whose
+        // overflow assertion was wrongly preserved on the full (deploy + runtime) asm.
+        let src = format!(
+            "PUSH1 0 PUSH1 0 PUSH1 0 CODECOPY PUSH1 0 PUSH1 0 RETURN \
+             PUSH1 4 CALLDATALOAD DUP1 PUSH1 36 CALLDATALOAD ADD SWAP1 DUP2 LT {REV} JUMPI"
+        );
+        let p = parse_str(&src);
+        let (_out, spans) = strip_guards(&p, &all_categories());
+        assert_eq!(spans.len(), 1, "overflow guard after a deploy-header RETURN was not stripped");
+        assert_eq!(spans[0].category, Category::Guard, "a stripped guard must carry the single Guard category");
+    }
+
+    #[test]
+    fn empty_enabled_set_disables_removal() {
+        // With the strip feature disabled (empty enabled set) nothing is removed.
         let p = parse_str(&format!("DUP1 PUSH1 1 ADD PUSH1 100 LT {REV} JUMPI"));
-        let only_abi: HashSet<Category> = [Category::Abi].into_iter().collect();
-        let (out, spans) = strip_guards(&p, &only_abi);
-        assert!(spans.is_empty(), "with the math category disabled the check must not be stripped");
+        let none: HashSet<Category> = HashSet::new();
+        let (out, spans) = strip_guards(&p, &none);
+        assert!(spans.is_empty(), "with the feature disabled the check must not be stripped");
         assert_eq!(out.len(), p.len());
     }
 }

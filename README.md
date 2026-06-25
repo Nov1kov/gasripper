@@ -5,9 +5,10 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A Rust CLI tool that maximally optimizes an EVM contract for gas. The goal is to **not change
-execution logic** while removing everything not needed for a bare run: redundant revert guards
-(overflow/underflow, ABI/calldata bounds, range/cast asserts). Fewer checks → less gas at
-execution time and smaller bytecode.
+execution logic** while shedding everything not needed for a bare run, using any provably-safe
+transformation that lowers gas. The technique shipped today is removing redundant revert guards
+(overflow/underflow, ABI/calldata bounds, range/cast asserts) — fewer checks → less gas at
+execution time and smaller bytecode — and the design leaves room for other gas-reducing passes.
 
 ## How it works
 
@@ -66,18 +67,20 @@ live in `src/core/strip.rs`.
 
 ## Features
 
-Each feature removes one class of guard, lives in its own module, and is toggled independently
-(**all enabled by default**). List them with `gasripper --list-features`.
+A feature is one independent gas-reduction pass, lives in its own module, and is toggled
+independently (**all enabled by default**). Every feature shipped today removes one class of guard,
+but a feature is not required to be guard-removal — any provably-safe gas saving qualifies. List
+them with `gasripper --list-features`.
 
 | Key | Strips | Docs |
 |---|---|---|
-| `math` | overflow/underflow and arithmetic revert checks | [`src/features/strip_math/README.md`](src/features/strip_math/README.md) |
-| `abi` | ABI/calldata bounds checks (length/offset validation) | [`src/features/strip_abi/README.md`](src/features/strip_abi/README.md) |
-| `assert` | other range/cast assert checks (neither abi nor math) | [`src/features/strip_assert/README.md`](src/features/strip_assert/README.md) |
+| `guards` | all provably-safe revert guards — overflow/underflow, division-by-zero, ABI/calldata bounds, range/cast asserts | [`src/features/guards/README.md`](src/features/guards/README.md) |
 
-`abi` is the **reference feature** — its [README](src/features/strip_abi/README.md) is the template
-(module docs + unit tests + a real-EVM e2e) every feature follows. Adding a feature:
-see [DEVELOPMENT.md](DEVELOPMENT.md).
+There is one feature today. The former `abi`/`math`/`assert` split was a fragile opcode-sniffing
+label (the same calldata bounds check landed in different classes across compiler codegen), so it
+was merged into this single honest feature. Its [README](src/features/guards/README.md) is the
+template (module docs + unit tests + a real-EVM e2e) a new pass follows; see
+[DEVELOPMENT.md](DEVELOPMENT.md).
 
 ### Disabling features
 
@@ -85,7 +88,7 @@ Any feature can be disabled in two ways (the CLI overrides the config):
 
 ```bash
 # via the command line
-gasripper contract.asm --disable math,abi
+gasripper contract.asm --disable guards
 
 # via a config file
 gasripper contract.asm --config gasripper.toml
@@ -95,9 +98,7 @@ gasripper contract.asm --config gasripper.toml
 
 ```toml
 [features]
-math   = false
-abi    = true
-assert = true
+guards = false
 ```
 
 By default **no config file is needed or searched for** — the tool runs on defaults alone (all
@@ -133,7 +134,7 @@ the log level with `RUST_LOG` (e.g. `RUST_LOG=debug`, `RUST_LOG=off`); the defau
 ## Usage
 
 ```bash
-# report: what would be stripped and by which categories (default behavior)
+# report: what would be stripped (default behavior)
 gasripper contract.asm
 
 # write the optimized assembly
@@ -146,8 +147,8 @@ gasripper --input-kind bytecode code.hex --emit-bytecode out.hex
 gasripper contract.vy  --emit-creation out.hex
 gasripper contract.sol --emit-creation out.hex
 
-# disable a category and pin the EVM version
-gasripper contract.vy --disable assert --evm-version cancun --emit-creation out.hex
+# disable the strip and pin the EVM version
+gasripper contract.vy --disable guards --evm-version cancun --emit-creation out.hex
 ```
 
 ### Creation bytecode (the product)
@@ -163,6 +164,17 @@ with the compiler's own assembler:
 
 A safety invariant guards every run: assembling with *no* deletions must reproduce the compiler's
 own bytecode byte-for-byte, otherwise the tool fails fast (a compiler-version drift).
+
+### Supported toolchain versions
+
+gasripper tracks the **latest** compiler release of each language — it drives the compiler's own
+assembler, so a new version is supported as soon as the baseline invariant above holds (which it
+verifies on every run). The versions currently pinned and tested in CI/e2e are:
+
+| Toolchain | Pinned version |
+|---|---|
+| Vyper | 0.4.3 |
+| Solidity (solc) | 0.8.24 |
 
 Point the tool at the right toolchain via the environment:
 

@@ -1,7 +1,10 @@
 # CLAUDE.md
 
-**gasripper** is an aggressive EVM gas optimizer: it removes provably-safe revert-guards (overflow,
-ABI/calldata bounds, range/cast asserts) from contract code without changing live execution.
+**gasripper** is an aggressive EVM gas optimizer: it lowers a contract's gas by any provably-safe
+transformation that does not change live execution. The technique implemented today is removing
+redundant revert-guards (overflow, ABI/calldata bounds, range/cast asserts), but the goal is gas
+reduction by any means — the architecture is meant to host other gas-saving passes too, not only
+guard removal.
 
 ## Language
 
@@ -77,7 +80,7 @@ strictly in English.
 
 Run the CLI: `./target/debug/gasripper <input>` (or `cargo run -- <input>`). With only an
 input path, all features are on and it prints a strip report. Key flags: `--emit-asm`,
-`--emit-bytecode`, `--disable math,abi`, `--config <file>`, `--input-kind`, `--list-features`.
+`--emit-bytecode`, `--disable guards`, `--config <file>`, `--input-kind`, `--list-features`.
 
 ## Project documentation
 
@@ -94,14 +97,15 @@ Rule: whenever you change a feature, you MUST check and update its own documenta
 
 ## Architecture
 
-Pipeline: **input frontend → instructions → strip engine (category-gated) → report / emit**.
+Pipeline: **input frontend → instructions → strip engine (feature-gated) → report / emit**.
 
 - `src/core/` — `asm.rs` (the `Instr` representation + parser), `stack.rs::strip_residue` (the
   safety criterion: a guard is removable only if its fall-through stack keeps live values intact,
   returning the minimal `POP`/`SWAP` shuffle), `strip.rs::strip_guards` (the engine that finds
-  `<cond> _sym_*revert* JUMPI` runs and rewrites the enabled categories), `bytecode.rs`, `opcodes.rs`.
-- `src/features/` — one module per strip `Category`, each owning its `META` + `strip()` + tests.
-  Add a feature: new `Category` in `strip.rs`, a module here, register it in `features::registry()`.
+  `<cond> _sym_*revert* JUMPI` runs and rewrites them when the feature is enabled), `bytecode.rs`, `opcodes.rs`.
+- `src/features/` — one module per gas-reduction pass, each owning its `META` + `strip()` + tests.
+  There is one today, `guards` (all revert-guard removal; the former `abi`/`math`/`assert` split was
+  a leaky opcode-sniff and was merged). Add a pass: a module here, register it in `features::registry()`.
 - `src/config.rs` — `FeatureConfig` with precedence defaults → config file → CLI; `enabled_categories()`
   feeds the engine.
 - `src/input/` — frontends produce `Loaded { instrs, symbolic, kind }`. `raw_asm`/`bytecode` are
