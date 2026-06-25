@@ -58,42 +58,42 @@ contract C {
 }
 ";
 
-fn abi_no_auth(lang: &str, source: &str, backend: Backend, filename: &str) {
+fn abi_no_auth(lang: &str, source: &str, backend: Backend, filename: &str, gas_base: u64, gas_opt: u64) {
     let path = write_temp(filename, source);
     let calldata = encode_call("foo(uint256,uint256)", &[3, 4]);
     let r = match measure(&backend, &path, Category::Abi, calldata) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("SKIP {lang} abi no-auth e2e (toolchain unavailable): {e}");
+            tracing::warn!("SKIP {lang} abi no-auth e2e (toolchain unavailable): {e}");
             return;
         }
     };
-    assert_preserved_and_smaller(&r, lang, 7);
+    assert_preserved_and_smaller(&r, lang, 7, gas_base, gas_opt);
 }
 
-fn abi_win(lang: &str, source: &str, backend: Backend, filename: &str) {
+fn abi_win(lang: &str, source: &str, backend: Backend, filename: &str, gas_base: u64, gas_opt: u64) {
     let path = write_temp(filename, source);
     let calldata = encode_call("foo(uint256,uint256)", &[3, 4]);
     let r = match measure(&backend, &path, Category::Abi, calldata) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("SKIP {lang} abi e2e (toolchain unavailable): {e}");
+            tracing::warn!("SKIP {lang} abi e2e (toolchain unavailable): {e}");
             return;
         }
     };
-    assert_win(&r, lang, 7); // foo(3,4) == 7, preserved, with less gas
+    assert_win(&r, lang, 7, gas_base, gas_opt); // foo(3,4) == 7, preserved, with less gas
     // The strip kept the auth guard: a non-owner caller is still rejected.
     assert_rejects_stranger(&r.creation_opt, encode_call("foo(uint256,uint256)", &[3, 4]));
 }
 
 #[test]
 fn vyper_abi_strip_saves_gas_and_preserves_behavior() {
-    abi_win("vyper", VYPER_CONTRACT, Backend::new(Lang::Vyper), "gasripper_abi_e2e.vy");
+    abi_win("vyper", VYPER_CONTRACT, Backend::new(Lang::Vyper), "gasripper_abi_e2e.vy", 23631, 23605);
 }
 
 #[test]
 fn solidity_abi_strip_saves_gas_and_preserves_behavior() {
-    abi_win("solidity", SOLIDITY_CONTRACT, Backend::new(Lang::Solidity), "gasripper_abi_e2e.sol");
+    abi_win("solidity", SOLIDITY_CONTRACT, Backend::new(Lang::Solidity), "gasripper_abi_e2e.sol", 23842, 23821);
 }
 
 // No trusted-caller wrapper: the abi guard is still stripped and the result
@@ -101,10 +101,10 @@ fn solidity_abi_strip_saves_gas_and_preserves_behavior() {
 // dispatcher's hot path).
 #[test]
 fn vyper_abi_strips_without_auth_wrapper() {
-    abi_no_auth("vyper", VYPER_NO_AUTH, Backend::new(Lang::Vyper), "gasripper_abi_noauth.vy");
+    abi_no_auth("vyper", VYPER_NO_AUTH, Backend::new(Lang::Vyper), "gasripper_abi_noauth.vy", 21860, 21860);
 }
 
 #[test]
 fn solidity_abi_strips_without_auth_wrapper() {
-    abi_no_auth("solidity", SOLIDITY_NO_AUTH, Backend::new(Lang::Solidity), "gasripper_abi_noauth.sol");
+    abi_no_auth("solidity", SOLIDITY_NO_AUTH, Backend::new(Lang::Solidity), "gasripper_abi_noauth.sol", 21860, 21860);
 }

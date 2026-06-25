@@ -9,9 +9,10 @@ cargo build              # debug -> target/debug/gasripper
 cargo build --release    # release -> target/release/gasripper
 ```
 
-The shipped binary has **no external dependencies** (pure `std`, builds offline). The only
-dependency is `revm`, declared in `[dev-dependencies]` — it is used by the e2e tests and is never
-linked into the binary.
+The shipped binary's runtime dependencies are `clap` (argument parsing and `--help`/`--version`
+generation) and `tracing` / `tracing-subscriber` (diagnostic logging to stderr, level via
+`RUST_LOG`); the config parser and core stay on `std` and build offline. `revm`, declared in
+`[dev-dependencies]`, is used by the e2e tests and is never linked into the binary.
 
 ## Tests
 
@@ -46,6 +47,11 @@ Note that **stripping always shrinks the creation bytecode, but call gas drops o
 stripped guard is on the call's hot path** — e.g. the calldata-size guard becomes hot once the
 contract has a real selector dispatcher (two+ functions, as the `owner()` getter adds). So the
 auth-wrapped tests show a gas win; the single-function no-auth tests show a bytecode win.
+
+`assert_win`/`assert_preserved_and_smaller` take the **exact** call gas before and after the strip
+(`gas_base`, `gas_opt`) and pin them with `assert_eq!`, so the numbers in the table below are not
+just documented — any drift of a single gas unit (a compiler-version bump, an engine change) fails
+the test. Update the pins in each `e2e.rs` and this table together.
 
 ### Running the full e2e (with toolchains)
 

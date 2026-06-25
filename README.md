@@ -109,7 +109,7 @@ features enabled), passing just the input path is enough.
 |---|---|---|
 | Raw assembly | `.asm` / `.evm` | parsed directly (including symbolic venom: `_sym_*`, `_OFST`, `_mem_`) |
 | Raw bytecode | `.hex` / `.bin` | disassembled |
-| Vyper contract | `.vy` | compiled with `vyper -f asm` (needs `vyper` in PATH) — **experimental** |
+| Vyper contract | `.vy` | compiled with `vyper -f asm` (needs `vyper` in PATH, or set `GASRIPPER_VYPER_PYTHON`) — **experimental** |
 | Solidity contract | `.sol` | compiled with `solc --bin-runtime` (needs `solc` in PATH) — **experimental** |
 
 The type is detected by extension; it can be set explicitly with
@@ -122,9 +122,13 @@ cargo build --release
 # binary: target/release/gasripper
 ```
 
-The binary has **no external crates** (pure `std`, builds offline). The compilers are runtime tools,
+The binary's only crate dependencies are `clap` (argument parsing) and `tracing` /
+`tracing-subscriber` (diagnostic logging); the core builds offline. The compilers are runtime tools,
 not build deps: `.vy`/`.sol` input and `--emit-creation` need `vyper` / `solc` installed (and a
 Python to run the sidecar).
+
+Diagnostic logs (compiler versions, errors) go to **stderr**; the report goes to **stdout**. Control
+the log level with `RUST_LOG` (e.g. `RUST_LOG=debug`, `RUST_LOG=off`); the default is `info`.
 
 ## Usage
 
@@ -170,6 +174,12 @@ GASRIPPER_VYPER_PYTHON=/path/to/python gasripper contract.vy --emit-creation out
 GASRIPPER_SOLC=/path/to/solc gasripper contract.sol --emit-creation out.hex
 # overrides: GASRIPPER_{VYPER,SOLC}_SIDECAR (script path), GASRIPPER_SOLC_PYTHON (interpreter)
 ```
+
+`GASRIPPER_VYPER_PYTHON` also selects the interpreter for the plain `.vy` frontend (it runs
+`<python> -m vyper`). On Windows this is often required: a PyInstaller-frozen `vyper.exe` (e.g. the
+one bundled with Foundry) ignores `PYTHONUTF8` and reads sources in the locale codec (cp1252), so a
+contract with non-ASCII bytes — Cyrillic comments, say — aborts with a `UnicodeDecodeError`. Point
+the variable at a real Python (a venv) and gasripper compiles it in UTF-8 mode.
 
 For Solidity the solc sidecar normalizes both revert idioms — *direct* (`<cond> PUSH[revert_tag]
 JUMPI`) and *inverse* (`<cond> PUSH[continue_tag] JUMPI; <inline revert>`, the `require` form) —

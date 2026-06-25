@@ -64,11 +64,11 @@ fn solidity_math_strip_saves_gas_and_preserves_behavior() {
     let r = match measure(&Backend::new(Lang::Solidity), &path, Category::Math, calldata) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("SKIP solidity math e2e (toolchain unavailable): {e}");
+            tracing::warn!("SKIP solidity math e2e (toolchain unavailable): {e}");
             return;
         }
     };
-    assert_win(&r, "solidity", 7);
+    assert_win(&r, "solidity", 7, 23842, 23811);
     assert_rejects_stranger(&r.creation_opt, encode_call("foo(uint256,uint256)", &[3, 4]));
 }
 
@@ -84,13 +84,14 @@ fn vyper_math_only_is_noop_overflow_is_assert_category() {
     let r = match measure(&Backend::new(Lang::Vyper), &path, Category::Math, calldata) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("SKIP vyper math e2e (toolchain unavailable): {e}");
+            tracing::warn!("SKIP vyper math e2e (toolchain unavailable): {e}");
             return;
         }
     };
     assert_eq!(r.stripped, 0, "math-only: the overflow assertion classifies as `assert`, not `math`");
     assert_eq!(U256::from_be_slice(&r.out_base), U256::from(7u64), "foo(3,4) must be 7");
     assert_eq!(r.gas_opt, r.gas_base, "no-op build must not change gas");
+    assert_eq!(r.gas_base, 23631, "no-op call gas drifted from pinned 23631 to {}", r.gas_base);
     assert_rejects_stranger(&r.creation_opt, encode_call("foo(uint256,uint256)", &[3, 4]));
 }
 
@@ -103,9 +104,9 @@ fn solidity_math_strips_without_auth_wrapper() {
     let r = match measure(&Backend::new(Lang::Solidity), &path, Category::Math, calldata) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("SKIP solidity math no-auth e2e (toolchain unavailable): {e}");
+            tracing::warn!("SKIP solidity math no-auth e2e (toolchain unavailable): {e}");
             return;
         }
     };
-    assert_preserved_and_smaller(&r, "solidity", 7);
+    assert_preserved_and_smaller(&r, "solidity", 7, 21860, 21860);
 }

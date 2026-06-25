@@ -10,8 +10,13 @@ name = "gasripper"
 path = "src/main.rs"
 
 [dependencies]
-# Intentionally no external dependencies: CLI, config parser, and core are all on std.
-# This guarantees offline builds and predictable behavior for a gas-critical tool.
+# Argument parsing and --help/--version generation. The config parser and core
+# stay on std, so the tool remains predictable for a gas-critical workflow.
+clap = { version = "4.6.1", features = ["derive"] }
+# Diagnostic logging (compiler versions, errors, e2e gas proofs). Level is driven
+# by RUST_LOG via tracing-subscriber's EnvFilter; the CLI report stays on stdout.
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 # Test-only: a real EVM to prove that stripped creation bytecode still deploys,

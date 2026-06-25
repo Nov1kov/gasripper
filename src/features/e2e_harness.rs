@@ -22,6 +22,17 @@ use revm::context::TxEnv;
 use revm::database::InMemoryDB;
 use revm::primitives::{keccak256, Address, Bytes, TxKind, U256};
 use revm::{Context, ExecuteCommitEvm, MainBuilder, MainContext};
+use tracing_subscriber::EnvFilter;
+
+/// Install a test-scoped log subscriber (idempotent across parallel tests) so the
+/// gas/SKIP diagnostics are captured by libtest and shown on failure or `--nocapture`.
+fn init_tracing() {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_test_writer()
+        .try_init();
+}
 
 /// Outcome of an end-to-end feature measurement.
 pub struct Report {
@@ -54,13 +65,17 @@ impl Report {
 /// Standard assertions for a "strip win" + a one-line gas/bytes log. Shared by
 /// every feature's e2e so the proof is asserted identically everywhere: at least
 /// one guard stripped, the call returns `expected` before and after, and the
-/// optimized call uses strictly less gas.
-pub fn assert_win(r: &Report, lang: &str, expected: u64) {
+/// optimized call uses strictly less gas. `gas_base`/`gas_opt` pin the exact
+/// measured call gas before and after the strip, so any drift in a single gas unit
+/// fails the test (the per-feature READMEs document these same numbers).
+pub fn assert_win(r: &Report, lang: &str, expected: u64, gas_base: u64, gas_opt: u64) {
     assert!(r.stripped >= 1, "{lang}: expected at least one check to strip");
     assert_eq!(U256::from_be_slice(&r.out_base), U256::from(expected), "{lang}: wrong result");
     assert_eq!(r.out_base, r.out_opt, "{lang}: optimized output must match baseline");
     assert!(r.gas_opt < r.gas_base, "{lang}: strip should reduce call gas: {} -> {}", r.gas_base, r.gas_opt);
-    eprintln!(
+    assert_eq!(r.gas_base, gas_base, "{lang}: baseline call gas drifted from pinned {gas_base} to {}", r.gas_base);
+    assert_eq!(r.gas_opt, gas_opt, "{lang}: optimized call gas drifted from pinned {gas_opt} to {}", r.gas_opt);
+    tracing::info!(
         "{lang}: call gas {} -> {} (saved {}), creation {} -> {} bytes (saved {})",
         r.gas_base, r.gas_opt, r.gas_saved(), r.bytes_before, r.bytes_after, r.bytes_saved(),
     );
@@ -71,13 +86,18 @@ pub fn assert_win(r: &Report, lang: &str, expected: u64) {
 /// bytecode shrinks. Call gas drops only when the stripped guard sits on the call's
 /// hot path (which depends on the dispatcher shape); the bytecode always shrinks.
 /// This proves the auth check is irrelevant to what the feature removes.
-pub fn assert_preserved_and_smaller(r: &Report, lang: &str, expected: u64) {
+/// `gas_base`/`gas_opt` pin the exact measured call gas before and after the strip
+/// (equal here, since a single-function contract has no hot selector dispatcher),
+/// so any drift in a single gas unit fails the test.
+pub fn assert_preserved_and_smaller(r: &Report, lang: &str, expected: u64, gas_base: u64, gas_opt: u64) {
     assert!(r.stripped >= 1, "{lang}: expected a guard to strip without an auth wrapper");
     assert_eq!(U256::from_be_slice(&r.out_base), U256::from(expected), "{lang}: wrong result");
     assert_eq!(r.out_base, r.out_opt, "{lang}: optimized output must match baseline");
     assert!(r.bytes_after < r.bytes_before, "{lang}: creation bytecode must shrink: {} -> {}", r.bytes_before, r.bytes_after);
     assert!(r.gas_opt <= r.gas_base, "{lang}: gas must not increase: {} -> {}", r.gas_base, r.gas_opt);
-    eprintln!(
+    assert_eq!(r.gas_base, gas_base, "{lang}: baseline call gas drifted from pinned {gas_base} to {}", r.gas_base);
+    assert_eq!(r.gas_opt, gas_opt, "{lang}: optimized call gas drifted from pinned {gas_opt} to {}", r.gas_opt);
+    tracing::info!(
         "{lang} (no auth): stripped {}, call gas {} -> {}, creation {} -> {} bytes (saved {})",
         r.stripped, r.gas_base, r.gas_opt, r.bytes_before, r.bytes_after, r.bytes_saved(),
     );
@@ -168,6 +188,7 @@ pub fn measure(
     only: Category,
     calldata: Vec<u8>,
 ) -> Result<Report, String> {
+    init_tracing();
     // 1. Compile + read runtime instructions (Err -> caller skips).
     let dump = backend.dump(source_path, None)?;
 

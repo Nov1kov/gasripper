@@ -57,47 +57,47 @@ contract C {
 }
 ";
 
-fn assert_win_and_auth(lang: &str, source: &str, backend: Backend, filename: &str) {
+fn assert_win_and_auth(lang: &str, source: &str, backend: Backend, filename: &str, gas_base: u64, gas_opt: u64) {
     let path = write_temp(filename, source);
     let r = match measure(&backend, &path, Category::Assert, encode_call("foo(uint256)", &[3])) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("SKIP {lang} assert e2e (toolchain unavailable): {e}");
+            tracing::warn!("SKIP {lang} assert e2e (toolchain unavailable): {e}");
             return;
         }
     };
-    assert_win(&r, lang, 3); // foo(3) == 3, preserved, with less gas
+    assert_win(&r, lang, 3, gas_base, gas_opt); // foo(3) == 3, preserved, with less gas
     assert_rejects_stranger(&r.creation_opt, encode_call("foo(uint256)", &[3]));
 }
 
-fn assert_no_auth(lang: &str, source: &str, backend: Backend, filename: &str) {
+fn assert_no_auth(lang: &str, source: &str, backend: Backend, filename: &str, gas_base: u64, gas_opt: u64) {
     let path = write_temp(filename, source);
     let r = match measure(&backend, &path, Category::Assert, encode_call("foo(uint256)", &[3])) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("SKIP {lang} assert no-auth e2e (toolchain unavailable): {e}");
+            tracing::warn!("SKIP {lang} assert no-auth e2e (toolchain unavailable): {e}");
             return;
         }
     };
-    assert_preserved_and_smaller(&r, lang, 3);
+    assert_preserved_and_smaller(&r, lang, 3, gas_base, gas_opt);
 }
 
 #[test]
 fn vyper_assert_strip_saves_gas_and_preserves_behavior() {
-    assert_win_and_auth("vyper", VYPER_CONTRACT, Backend::new(Lang::Vyper), "gasripper_assert_e2e.vy");
+    assert_win_and_auth("vyper", VYPER_CONTRACT, Backend::new(Lang::Vyper), "gasripper_assert_e2e.vy", 23479, 23445);
 }
 
 #[test]
 fn solidity_assert_strip_saves_gas_and_preserves_behavior() {
-    assert_win_and_auth("solidity", SOLIDITY_CONTRACT, Backend::new(Lang::Solidity), "gasripper_assert_e2e.sol");
+    assert_win_and_auth("solidity", SOLIDITY_CONTRACT, Backend::new(Lang::Solidity), "gasripper_assert_e2e.sol", 23617, 23576);
 }
 
 #[test]
 fn vyper_assert_strips_without_auth_wrapper() {
-    assert_no_auth("vyper", VYPER_NO_AUTH, Backend::new(Lang::Vyper), "gasripper_assert_noauth.vy");
+    assert_no_auth("vyper", VYPER_NO_AUTH, Backend::new(Lang::Vyper), "gasripper_assert_noauth.vy", 21510, 21510);
 }
 
 #[test]
 fn solidity_assert_strips_without_auth_wrapper() {
-    assert_no_auth("solidity", SOLIDITY_NO_AUTH, Backend::new(Lang::Solidity), "gasripper_assert_noauth.sol");
+    assert_no_auth("solidity", SOLIDITY_NO_AUTH, Backend::new(Lang::Solidity), "gasripper_assert_noauth.sol", 21510, 21510);
 }

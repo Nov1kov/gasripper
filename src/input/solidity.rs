@@ -30,7 +30,7 @@ pub fn ensure_installed() -> Result<String, String> {
 /// Compile the contract to runtime bytecode and disassemble it.
 pub fn load(path: &str, evm_version: Option<&str>) -> Result<Loaded, String> {
     let version = ensure_installed()?;
-    eprintln!("solc: {version}");
+    tracing::info!("solc: {version}");
 
     let mut cmd = Command::new("solc");
     cmd.arg("--bin-runtime").arg("--optimize");

@@ -6,6 +6,9 @@
 use std::collections::HashMap;
 use std::fs;
 
+use clap::{CommandFactory, Parser};
+use tracing_subscriber::EnvFilter;
+
 use crate::config::FeatureConfig;
 use crate::core::asm::render;
 use crate::core::bytecode::{assemble, bytes_to_hex};
@@ -14,29 +17,7 @@ use crate::features;
 use crate::input::{self, InputKind, Loaded};
 use crate::sidecar::{Backend, Lang};
 
-const HELP: &str = "\
-gasripper — super-aggressive gas optimizer for EVM bytecode/assembly.
-
-USAGE:
-    gasripper [OPTIONS] <INPUT>
-
-INPUT:
-    path to .vy / .sol / .asm / .hex, or '-' for stdin (with --input-kind).
-
-OPTIONS:
-    --input-kind <kind>    vyper|solidity|asm|bytecode (default: auto by extension)
-    --config <path>        feature config file (not used by default)
-    --disable <f,f,...>    disable features (comma-separated; flag may repeat)
-    --enable <f,f,...>     enable features (overrides --config)
-    --evm-version <v>      EVM version for compiler frontends (vyper/solc)
-    --report               show what would be stripped and exit (this is the default)
-    --emit-asm <path>      write the optimized assembly text
-    --emit-bytecode <path> write the optimized bytecode (hex; non-symbolic input only)
-    --emit-creation <path> write optimized creation bytecode (hex; Vyper source only)
-    --list-features        list features and exit
-    -h, --help             this help
-    -V, --version          version
-
+const AFTER_HELP: &str = "\
 FEATURES (all enabled by default):
     math    — strip overflow/underflow and arithmetic revert guards
     abi     — strip ABI/calldata bounds checks
@@ -45,130 +26,88 @@ FEATURES (all enabled by default):
 ALWAYS preserved: authorization (CALLER/ORIGIN), any side effects, and checks that
 consume their own input.";
 
+/// Super-aggressive gas optimizer for EVM bytecode/assembly.
+#[derive(Parser, Debug)]
+#[command(name = "gasripper", version, about, after_help = AFTER_HELP)]
+struct Cli {
+    /// path to .vy / .sol / .asm / .hex, or '-' for stdin (with --input-kind)
+    input: Option<String>,
+
+    /// input frontend: vyper|solidity|asm|bytecode (default: auto by extension)
+    #[arg(long = "input-kind", value_name = "kind", default_value = "auto",
+          value_parser = parse_input_kind)]
+    input_kind: InputKind,
+
+    /// feature config file (not used by default)
+    #[arg(long, value_name = "path")]
+    config: Option<String>,
+
+    /// disable features (comma-separated; flag may repeat)
+    #[arg(long, value_name = "f,f,...", value_delimiter = ',')]
+    disable: Vec<String>,
+
+    /// enable features (overrides --config)
+    #[arg(long, value_name = "f,f,...", value_delimiter = ',')]
+    enable: Vec<String>,
+
+    /// EVM version for compiler frontends (vyper/solc)
+    #[arg(long = "evm-version", value_name = "v")]
+    evm_version: Option<String>,
+
+    /// show what would be stripped (this is the default)
+    #[arg(long)]
+    report: bool,
+
+    /// write the optimized assembly text
+    #[arg(long = "emit-asm", value_name = "path")]
+    emit_asm: Option<String>,
+
+    /// write the optimized bytecode (hex; non-symbolic input only)
+    #[arg(long = "emit-bytecode", value_name = "path")]
+    emit_bytecode: Option<String>,
+
+    /// write optimized creation bytecode (hex; Vyper source only)
+    #[arg(long = "emit-creation", value_name = "path")]
+    emit_creation: Option<String>,
+
+    /// list features and exit
+    #[arg(long = "list-features")]
+    list_features: bool,
+}
+
+#[inline]
+fn parse_input_kind(s: &str) -> Result<InputKind, String> {
+    InputKind::parse(s).ok_or_else(|| format!("unknown --input-kind: {s}"))
+}
+
+/// Install a diagnostic-log subscriber writing to stderr; the level comes from
+/// `RUST_LOG` (default `info`). The CLI report itself stays on stdout.
+fn init_tracing() {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .init();
+}
+
 /// CLI entry point. Returns the process exit code.
 pub fn run() -> i32 {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    match run_inner(&args) {
+    init_tracing();
+    if std::env::args_os().len() <= 1 {
+        let _ = Cli::command().print_help();
+        println!();
+        return 0;
+    }
+    match run_inner(Cli::parse()) {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("error: {e}");
+            tracing::error!("{e}");
             1
         }
     }
 }
 
-struct Cli {
-    input: Option<String>,
-    input_kind: InputKind,
-    config: Option<String>,
-    disable: Vec<String>,
-    enable: Vec<String>,
-    evm_version: Option<String>,
-    report: bool,
-    emit_asm: Option<String>,
-    emit_bytecode: Option<String>,
-    emit_creation: Option<String>,
-    list_features: bool,
-    help: bool,
-    version: bool,
-}
-
-fn parse_args(args: &[String]) -> Result<Cli, String> {
-    let mut c = Cli {
-        input: None,
-        input_kind: InputKind::Auto,
-        config: None,
-        disable: Vec::new(),
-        enable: Vec::new(),
-        evm_version: None,
-        report: false,
-        emit_asm: None,
-        emit_bytecode: None,
-        emit_creation: None,
-        list_features: false,
-        help: false,
-        version: false,
-    };
-    let mut i = 0;
-    while i < args.len() {
-        let a = args[i].as_str();
-        let take = |name: &str| -> Result<String, String> {
-            args.get(i + 1)
-                .cloned()
-                .ok_or_else(|| format!("{name} requires an argument"))
-        };
-        match a {
-            "-h" | "--help" => c.help = true,
-            "-V" | "--version" => c.version = true,
-            "--report" => c.report = true,
-            "--list-features" => c.list_features = true,
-            "--input-kind" => {
-                let v = take("--input-kind")?;
-                c.input_kind = InputKind::parse(&v)
-                    .ok_or_else(|| format!("unknown --input-kind: {v}"))?;
-                i += 1;
-            }
-            "--config" => {
-                c.config = Some(take("--config")?);
-                i += 1;
-            }
-            "--disable" => {
-                c.disable.extend(split_list(&take("--disable")?));
-                i += 1;
-            }
-            "--enable" => {
-                c.enable.extend(split_list(&take("--enable")?));
-                i += 1;
-            }
-            "--evm-version" => {
-                c.evm_version = Some(take("--evm-version")?);
-                i += 1;
-            }
-            "--emit-asm" => {
-                c.emit_asm = Some(take("--emit-asm")?);
-                i += 1;
-            }
-            "--emit-bytecode" => {
-                c.emit_bytecode = Some(take("--emit-bytecode")?);
-                i += 1;
-            }
-            "--emit-creation" => {
-                c.emit_creation = Some(take("--emit-creation")?);
-                i += 1;
-            }
-            other if other.starts_with('-') && other != "-" => {
-                return Err(format!("unknown option: {other}"));
-            }
-            _ => {
-                if c.input.is_some() {
-                    return Err(format!("extra positional argument: {a}"));
-                }
-                c.input = Some(a.to_string());
-            }
-        }
-        i += 1;
-    }
-    Ok(c)
-}
-
-fn split_list(s: &str) -> Vec<String> {
-    s.split(',')
-        .map(|x| x.trim().to_string())
-        .filter(|x| !x.is_empty())
-        .collect()
-}
-
-fn run_inner(args: &[String]) -> Result<i32, String> {
-    let cli = parse_args(args)?;
-
-    if cli.help || args.is_empty() {
-        println!("{HELP}");
-        return Ok(0);
-    }
-    if cli.version {
-        println!("gasripper {}", env!("CARGO_PKG_VERSION"));
-        return Ok(0);
-    }
+fn run_inner(cli: Cli) -> Result<i32, String> {
     if cli.list_features {
         print_features();
         return Ok(0);
@@ -181,10 +120,10 @@ fn run_inner(args: &[String]) -> Result<i32, String> {
             fs::read_to_string(path).map_err(|e| format!("could not read config {path}: {e}"))?;
         config.apply_file(&content)?;
     }
-    for key in &cli.disable {
+    for key in cli.disable.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
         config.disable(key)?;
     }
-    for key in &cli.enable {
+    for key in cli.enable.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
         config.enable(key)?;
     }
 
@@ -359,28 +298,31 @@ mod tests {
 
     #[test]
     fn parse_basic_args() {
-        let args: Vec<String> = ["--disable", "math,abi", "in.asm"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let c = parse_args(&args).unwrap();
-        assert_eq!(c.input.as_deref(), Some("in.asm"));
-        assert_eq!(c.disable, vec!["math", "abi"]);
+        let c = Cli::try_parse_from(["gasripper", "--disable", "math,abi", "in.asm"]).unwrap();
+        assert_eq!(c.input.as_deref(), Some("in.asm"), "positional input was not captured");
+        assert_eq!(c.disable, vec!["math", "abi"], "comma list was not split into features");
     }
 
     #[test]
     fn unknown_option_errors() {
-        let args: Vec<String> = ["--nope".to_string()].to_vec();
-        assert!(parse_args(&args).is_err());
+        assert!(
+            Cli::try_parse_from(["gasripper", "--nope"]).is_err(),
+            "an unknown option was accepted instead of rejected"
+        );
     }
 
     #[test]
     fn repeated_disable_accumulates() {
-        let args: Vec<String> = ["--disable", "math", "--disable", "assert", "in.asm"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let c = parse_args(&args).unwrap();
-        assert_eq!(c.disable, vec!["math", "assert"]);
+        let c = Cli::try_parse_from(["gasripper", "--disable", "math", "--disable", "assert", "in.asm"])
+            .unwrap();
+        assert_eq!(c.disable, vec!["math", "assert"], "repeated --disable flags did not accumulate");
+    }
+
+    #[test]
+    fn unknown_input_kind_errors() {
+        assert!(
+            Cli::try_parse_from(["gasripper", "--input-kind", "nope", "in.asm"]).is_err(),
+            "an unknown --input-kind value was accepted instead of rejected"
+        );
     }
 }
