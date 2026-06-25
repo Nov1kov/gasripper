@@ -1,6 +1,7 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+**gasripper** is an aggressive EVM gas optimizer: it removes provably-safe revert-guards (overflow,
+ABI/calldata bounds, range/cast asserts) from contract code without changing live execution.
 
 ## Language
 
@@ -8,101 +9,117 @@ You may reply in whatever language is convenient, but all code and every file in
 (source, comments, identifiers, CLI help text, strings, README, Cargo.toml, docs) MUST be written
 strictly in English.
 
-## Commands
+## Development rules
 
-```bash
-cargo build                 # debug build
-cargo build --release       # release binary -> target/release/gasripper
-cargo test                  # run all unit tests (no external compilers needed)
-cargo test strip_math       # run tests in one module by name substring
-cargo test overflow_check_removed   # run a single test by name
-```
+### CORE
+- Ask questions if I did not specify the task clearly enough.
+- **Do NOT present guesses about code behavior as fact.** Before stating what a flag/function/field/pipeline stage does (especially when concluding about the cause of a bug), OPEN the source and verify. If you cannot verify, or it is an assumption, explicitly mark it as "hypothesis"/"assumption" instead of writing it as a statement of fact.
+- At the end, try to verify the code is free of errors via `cargo check` or `cargo test`.
+- IF there is not enough data for a given spot, mark it with a TODO pointing to the place to return to later.
+- Abort the task if you see a potential severe performance regression caused by the new changes.
+- If you fixed a bug, ALWAYS lock in the fix with a new test case.
+- Every bug must be reproduced by a unit test before being fixed. **Order: first write a test that FAILS on the current code (reproduces the bug), then fix the code so the test passes. If the test does not fail without the fix, it does not reproduce the bug and you must pick different input data.**
+- Every change must be covered by a unit test to guarantee repeatability.
+- The existing code structure must not be changed without a strong reason.
+- Minor inconsistencies and typos in the existing code may be fixed.
+- Constantly apply the boy-scout rule. If you touch some code, leave it better than it was.
+- **Keep the documentation up to date.** On major architecture changes, adding new modules/crates, or changing the data format — you MUST update the corresponding documents (`README.md`, `DEVELOPMENT.md`, and the per-feature READMEs under `src/features/`). Documentation must not diverge from the code. Check the description you add against the actual code instead of writing it from memory.
+
+### CODE DESIGN
+- **DRY (Don't Repeat Yourself)**: if you see repeated code (3+ duplicated lines), you MUST extract it into a separate method/function. Code duplication is not acceptable. **DRY ≠ reducing arguments**: cutting the number of parameters by fixing the rest is not deduplication — it is a hidden restriction of flexibility.
+- If you need to parallelize or run some block of code in threads, extract that block into a separate function.
+- If you need to add some functionality, always extract it into a separate function. IF it is a code fix, fix it in place, without creating a function.
+- If you need to store some string or number, extract it into a `const` when possible. **Exception: error messages in `.expect()` and `.unwrap_or_else()` calls do not need to be moved to a `const` — leave the string literal in place.**
+- Do not add methods and functions you are not going to use right now.
+- Comments in code are only for explaining non-obvious places.
+- Do not write comments if the name of the function / method / struct / class already reflects the action or purpose performed.
+- Do not write comments that refer to the work done, for example:
+  - "After refactoring, A is done here, which does B." INSTEAD write: "A does B."
+  - "Tests moved into a separate file because of size (~2900 lines)." Just do not write such a line — it does not relate to the code.
+- Tombstone comments about absent code are forbidden. Marker words: "previously", "used to be", "lived here", "no longer needed", "before the refactoring", "removed". If the code is deleted, delete the mention of it too. A comment describes what the code does NOW, not its history.
+- Do NOT write comments about which implementation stage this currently is.
+- A comment ALWAYS describes the behavior of the current piece of code, not the developer's task or a stream of consciousness about what we are doing right now.
+- Leave and do not touch comments if one of these words is next to them: debug, todo, note.
+- Variable names must be single nouns, never compound or composite.
+- Method names must be single verbs, never compound or composite.
+- Favor "fail fast" paradigm over "fail safe": throw exception earlier.
+- Constructors may not contain any code except assignment statements.
+- A class name must reflect strictly the functionality it provides.
+- Setters must be avoided, as they make objects mutable.
+- Immutable objects must be favored over mutable ones.
+- Every class may have only one primary constructor; any secondary constructor must delegate to it.
+- Every class may encapsulate no more than four attributes.
+- Every class must encapsulate at least one attribute.
+- Utility classes are strictly prohibited.
+- Static methods in classes are strictly prohibited.
+- Method names must respect the CQRS principle: they must be either nouns or verbs.
+- **No "post-constructors"** (`let x = T::new(...); x.with_foo(foo)` or chains like `T::new(...).with_foo(foo).with_bar(bar)`). If a type already has a `new` constructor, add the new parameter directly to its signature and update all callers. If there is no constructor, fill the struct literal completely in one place. Builder/`with_*` methods are allowed only if there are at least 3+ of them and the type genuinely needs flexible construction.
+- **Separate module responsibilities**: the infrastructure layer (cache, IO, serde) must not contain domain logic. Infrastructure returns primitives (a file name, opening a writer, finalization) — coordinating the construction of entities lives in the domain module.
+- **A function lives where it is used**: if a function is called only from one module, define it in that module as private, rather than `pub`/`pub(crate)` in a foreign one.
+
+### Rust specific
+- Always add `#[inline]` if a function or method body contains only a single line of code. **Exception: do not add `#[inline]` inside `mod tests`, `#[cfg(test)]` blocks, and mock modules (`mod mock`).**
+- Try not to use `unwrap()`. Only where it is guaranteed there is no error at that spot.
+- **`panic!` or `expect` is appropriate for invariant violations** — situations that must not occur under correct use of the code (a programming error, not a runtime error). Do not replace `panic!` with graceful error handling in such places.
+- **Do not delete code marked with `// @keep`** — intentionally kept debug utilities.
+
+### HOW TO WRITE UNIT TEST
+- Briefly state in a comment what the test checks and what it expects.
+- Every assertion must include a failure message that is a negatively toned claim about the error.
+- IF tests fail with a "429 Rate Limit" error during a run, run that test alone separately and make sure it works.
+- **Do NOT save real files in tests** — it interferes with parallel test execution. Use in-memory structures and `to_json()`/`from_json()` methods to check serialization.
+- **Do NOT write tests for code inside `#[cfg(test)]` and mock files.**
+- **Do NOT write tests that merely check a constant value** (`assert_eq!(CONST, 42)`). A test must check logic, not a definition.
+- **Do NOT write tests that only cover `match`/`switch` mapping branches** (e.g. `category_key(Category::X) == "x"`). Mappings are declarative data, not logic. Such tests are equivalent to checking a constant and provide no value.
+- **Do NOT write tests for Display, logging, or print functions.** It is important to test business logic and its edge cases.
+- **A test must check a SUCCESSFUL result**, not swap one error for another. If a fix repairs error X, the test must show the operation completes successfully (expect/unwrap), not that error Y now occurs instead of X. If it is impossible to write a test with a successful result — say so directly, rather than masking the problem with an assert on a different error.
+- **Do NOT use local imports (block-scoped / function-scoped `use`) inside tests and test helpers.** All `use crate::...` / `use super::...` must be at the top of `mod tests` (or at the module level for a helper function). A local `use` inside a `#[test]` or a helper function hides the test's dependencies, hinders grepping "who uses what", and breeds duplicates when a test is copied. Exception — resolving a name collision or `use ... as alias` for one or two calls.
 
 Run the CLI: `./target/debug/gasripper <input>` (or `cargo run -- <input>`). With only an
 input path, all features are on and it prints a strip report. Key flags: `--emit-asm`,
 `--emit-bytecode`, `--disable math,abi`, `--config <file>`, `--input-kind`, `--list-features`.
 
-No external crates — pure `std`, so builds work offline. Edition 2024 (needs a recent toolchain).
-Full testing/e2e setup (toolchain env vars, the real-EVM harness, adding a feature): see
-[DEVELOPMENT.md](DEVELOPMENT.md).
+## Project documentation
 
-## What this tool does
+Before working and when making changes, cross-check against these documents (they live in the
+repository root):
 
-gasripper is an aggressive EVM gas optimizer: it removes provably-safe revert-guards (overflow,
-ABI/calldata bounds, range/cast asserts) from contract code without changing live execution.
-It is a Rust port of the Python `evm_asm_optimizer/` (kept in-repo for reference); the stack
-identity criterion and strip algorithm are ported 1:1.
+- [README.md](README.md) — project overview, safety model, features, installation, usage,
+  environment variables.
+- [DEVELOPMENT.md](DEVELOPMENT.md) — full testing/e2e setup, toolchain env vars, the real-EVM
+  harness, and how to add a feature.
+
+Rule: whenever you change a feature, you MUST check and update its own documentation — the
+`README.md` inside that feature's folder (`src/features/<feature>/README.md`).
 
 ## Architecture
 
 Pipeline: **input frontend → instructions → strip engine (category-gated) → report / emit**.
 
-- `src/core/` — the core module every feature depends on:
-  - `asm.rs` defines `Instr { kind: Kind, tokens: Vec<String> }`, the single representation for
-    both concrete ops and symbolic Vyper-venom tokens (`_sym_*`, `_OFST`, `_mem_`). `parse_str`
-    is the port of Python `to_instr`. `tokens[0]` is always the mnemonic.
-  - `stack.rs::strip_residue` is the safety criterion (generalizes `simulate_identity`, kept for
-    reference/tests): simulate a run over slot-ids; a guard is removable iff its fall-through stack
-    consists ONLY of input slots (no created value survives into live code). Returns the minimal
-    `POP`/`SWAP` shuffle reproducing that residue — `[]` for a pure identity (delete), a few ops for
-    a consuming check (e.g. an overflow assertion: keep `ADD`, replace `SWAP1 DUP2 LT revert JUMPI`
-    with `SWAP1 POP`). DUP/SWAP modeled exactly; other ops via `(pops, pushes)` from `opcodes.rs`.
-  - `strip.rs::strip_guards(instrs, &enabled_categories)` is the engine. It scans for
-    `<cond> _sym_*revert* JUMPI`, grows the LONGEST barrier-free suffix that `strip_residue` accepts,
-    and rewrites it (delete or shuffle) **only if its `Category` is in the enabled set**. A `Span`
-    now carries its `replacement` ops. It always preserves auth (`CALLER`/`ORIGIN`), side-effects
-    (`is_side`), and non-terminal `JUMP(I)`; residue strips that DROP a value also require their
-    straight-line block (`block_clean_for_residue`) to be free of auth/side-effects, so a
-    `msg.sender` check or a call's success flag is never dropped. Because the removed run keeps the
-    arithmetic and cuts only the *assertion*, an overflow check classifies as `assert`, not `math`.
-  - `bytecode.rs` disassembles raw bytecode and assembles **concrete** programs only.
-
-- `src/features/` — each feature is one `Category` of guard to strip, lives in its own module,
-  exposes `META: FeatureMeta` + a thin `strip()`, and owns the tests that pin down exactly what it
-  removes vs. preserves. The CLI does **not** run features one-by-one; it collects enabled
-  categories from `config` and calls `strip_guards` once. To add a feature: add a `Category`
-  variant in `strip.rs`, a module here, and register it in `features::registry()`.
-
-- `src/config.rs` — `FeatureConfig`, precedence defaults → config file → CLI (`--enable`/`--disable`).
-  `enabled_categories()` is the bridge to the strip engine.
-
-- `src/input/` — frontends produce a `Loaded { instrs, symbolic, kind }`. `raw_asm` and `bytecode`
-  are fully supported; `vyper`/`solidity` shell out to the compiler (presence-checked) and are
-  **experimental**.
+- `src/core/` — `asm.rs` (the `Instr` representation + parser), `stack.rs::strip_residue` (the
+  safety criterion: a guard is removable only if its fall-through stack keeps live values intact,
+  returning the minimal `POP`/`SWAP` shuffle), `strip.rs::strip_guards` (the engine that finds
+  `<cond> _sym_*revert* JUMPI` runs and rewrites the enabled categories), `bytecode.rs`, `opcodes.rs`.
+- `src/features/` — one module per strip `Category`, each owning its `META` + `strip()` + tests.
+  Add a feature: new `Category` in `strip.rs`, a module here, register it in `features::registry()`.
+- `src/config.rs` — `FeatureConfig` with precedence defaults → config file → CLI; `enabled_categories()`
+  feeds the engine.
+- `src/input/` — frontends produce `Loaded { instrs, symbolic, kind }`. `raw_asm`/`bytecode` are
+  supported; `vyper`/`solidity` shell out to the compiler and are **experimental**.
 
 ## Critical constraint: symbolic vs. concrete
 
-The strip engine detects guards **by symbolic revert labels** (`_sym_*revert*`). So real stripping
-works on symbolic assembly (raw `.asm`, Vyper-venom output) — not on resolved raw bytecode/Solidity
-(no symbolic labels → nothing detected yet).
+Guards are detected **by symbolic revert labels** (`_sym_*revert*`), so stripping works on symbolic
+assembly only — not on resolved raw bytecode/Solidity. `Loaded.symbolic` gates emission: symbolic
+programs allow `--emit-asm` only; concrete `.hex`/`.bin` round-trip to `--emit-bytecode`. There is
+deliberately **no hand-written linker** (wrong bytecode in a gas tool is dangerous).
 
-`Loaded.symbolic` gates emission: symbolic programs can only `--emit-asm` (label relinking with
-PUSH-size fixpoint is deliberately **not** implemented — wrong bytecode in a gas tool is dangerous).
-Concrete programs (`.hex`/`.bin`) round-trip to `--emit-bytecode`. Do not add a guessed linker; if
-extending emission, treat it as a real assembler with a label-resolution fixpoint.
-
-**Creation bytecode** (`--emit-creation`, Vyper only) sidesteps the linker entirely: `src/sidecar.rs`
-drives `scripts/vyper_sidecar.py`, which compiles the source, hands the RUNTIME instructions to the
-Rust strip engine, then re-assembles the full program (constructor untouched) with **Vyper's own
-assembler** (`assembly_to_evm`) — not a hand-written linker. A baseline invariant (assemble with no
-deletions == Vyper's reference bytecode) fails fast on compiler drift. The interpreter/script come
-from `GASRIPPER_VYPER_PYTHON` / `GASRIPPER_VYPER_SIDECAR`.
-
-**Solidity** is wired the same way (`src/sidecar.rs::Lang::Solidity`, `scripts/solc_sidecar.py`):
-`solc --asm-json` ⇄ `--import-asm-json` (byte-identical round-trip), strip the runtime, solc
-re-links. Both languages share ONE Rust protocol client (`Backend`) and ONE descriptor format. The
-solc sidecar **normalizes both revert idioms** so the unchanged strip engine handles them: *direct*
-(`<cond> PUSH[revert_tag] JUMPI`) — the `PUSH [tag]` to a pure-revert block becomes `pushsym
-_sym_revert_<n>`; *inverse* (`<cond> PUSH[continue_tag] JUMPI; <inline revert>`, the `require` form)
-— the `PUSH [tag]` becomes `pushsym _sym_revert_inv_<n>`, and `build` also deletes the inline revert
-block when the guard's JUMPI is deleted (indices stay 1:1; detection is deterministic across
-dump/build). `solc` comes from `GASRIPPER_SOLC`; interpreter/script from `GASRIPPER_SOLC_PYTHON` /
-`GASRIPPER_SOLC_SIDECAR`.
-
-The `abi` feature (`src/features/strip_abi/`) is the reference feature: a feature README + rich
-module docs + unit tests + an `e2e.rs` that proves gas savings on a real EVM (`revm`, a
-**dev-dependency only** — the shipped binary stays pure `std`) for BOTH Vyper and Solidity via the
-shared harness `src/features/e2e_harness.rs`. Each e2e skips cleanly when its toolchain is absent.
+`--emit-creation` (Vyper/Solidity) produces deployable creation bytecode via a per-language sidecar
+(`src/sidecar.rs` + `scripts/{vyper,solc}_sidecar.py`): the compiler emits symbolic runtime assembly,
+the Rust engine strips it, and the **compiler's own assembler** re-links (constructor untouched). A
+baseline invariant (assemble with no deletions == the compiler's reference bytecode) fails fast on
+drift. Toolchains come from `GASRIPPER_*` env vars. `revm` is a **dev-dependency only** (e2e gas
+proofs); the shipped binary stays pure `std`.
 
 ## Safety invariants (do not break)
 

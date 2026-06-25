@@ -1,15 +1,40 @@
-> ⚠️ **DISCLAIMER: gasripper performs SUPER-AGGRESSIVE gas optimization and may make UNSAFE changes to a contract.** The tool strips from the bytecode everything not needed for a "bare" execution (input validation, overflow/underflow guards, ABI/bounds checks). This is safe ONLY when the contract is called by a trusted caller with known-correct calldata. For a publicly callable contract, stripping these checks creates vulnerabilities. Use at your own risk and always verify the result.
+> ⚠️ **DISCLAIMER: gasripper performs SUPER-AGGRESSIVE gas optimization and may make UNSAFE changes to a contract.** This is safe ONLY when the contract is called by a trusted caller with known-correct calldata. For a publicly callable contract, stripping these checks creates vulnerabilities. Use at your own risk and always verify the result.
 
 # gasripper
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A Rust CLI tool that maximally optimizes an EVM contract for gas. The goal is to **not change
 execution logic** while removing everything not needed for a bare run: redundant revert guards
 (overflow/underflow, ABI/calldata bounds, range/cast asserts). Fewer checks → less gas at
 execution time and smaller bytecode.
 
-This is a Rust port and evolution of the Python project [`evm_asm_optimizer`](./evm_asm_optimizer):
-the stack-identity engine and the safe-removal criterion are ported 1:1, with a modular feature
-system, CLI/config toggling, and several input frontends added on top.
+## How it works
+
+Both compilers lower a contract to a **symbolic assembly** (labels not yet resolved to addresses).
+gasripper strips the revert-guards at exactly that stage, then hands it back so the **compiler's own
+assembler** links it to the final creation bytecode — no hand-written linker, constructor untouched.
+
+```mermaid
+flowchart LR
+    subgraph V ["Vyper"]
+        direction LR
+        v1[".vy"] --> v2["AST"] --> v3["Venom IR"] --> v4["venom assembly<br/>symbolic _sym_* labels"]
+    end
+    subgraph S ["Solidity"]
+        direction LR
+        s1[".sol"] --> s2["AST"] --> s3["Yul IR"] --> s4["EVM assembly<br/>tag labels"]
+    end
+    v4 --> G
+    s4 --> G
+    G["✂ gasripper<br/>strip revert-guards<br/>(shared engine)"]:::opt
+    G -->|venom| AV["Vyper's assembler<br/>assembly_to_evm"]
+    G -->|EVM asm| AS["solc's assembler<br/>--import-asm-json"]
+    AV --> B["creation bytecode"]
+    AS --> B
+    B --> E["deploy → runs on EVM"]
+    classDef opt fill:#ffe1e1,stroke:#d33,stroke-width:2px,color:#000;
+```
 
 ## Safety model
 
@@ -97,7 +122,9 @@ cargo build --release
 # binary: target/release/gasripper
 ```
 
-No external dependencies — the binary builds offline on pure `std`.
+The binary has **no external crates** (pure `std`, builds offline). The compilers are runtime tools,
+not build deps: `.vy`/`.sol` input and `--emit-creation` need `vyper` / `solc` installed (and a
+Python to run the sidecar).
 
 ## Usage
 
@@ -122,14 +149,8 @@ gasripper contract.vy --disable assert --evm-version cancun --emit-creation out.
 ### Creation bytecode (the product)
 
 `--emit-creation` produces **deployable creation bytecode** — the hex you send in a deployment
-transaction (constructor included; the constructor is never modified). gasripper does this without
-a hand-written linker: it drives a thin per-language sidecar that
-
-1. compiles the source and hands the **runtime** assembly to the Rust strip engine,
-2. lets Rust decide which guard instructions to delete,
-3. re-assembles the whole program with the **compiler's own assembler**.
-
-Both backends speak one shared protocol, so the Rust orchestration is written once:
+transaction. Each language uses a thin sidecar (see [How it works](#how-it-works)) that re-assembles
+with the compiler's own assembler:
 
 | Language | Sidecar | Re-assembles with |
 |---|---|---|
@@ -156,17 +177,11 @@ into the symbolic shape the shared engine expects, so the same engine strips bot
 
 ## Limitations
 
-- **Creation bytecode** (`--emit-creation`) is produced for Vyper and Solidity via the sidecars,
-  which re-assemble with each **compiler's own assembler** — gasripper never guesses a linker. For
-  raw `.asm` input the tool emits optimized **assembly text** (`--emit-asm`); concrete `.hex`/`.bin`
-  round-trip to `--emit-bytecode`.
-- The plain report / `--emit-asm` path for `.sol` still uses `solidity.rs` (`--bin-runtime`
-  disassembly), which has no symbolic labels; the symbolic detection there is a separate frontend
-  from the `--emit-creation` sidecar path.
-- Stripping validation is **safe only with a trusted caller**. Do not apply it to a publicly
-  callable contract.
-- Authorization checks (`CALLER`/`ORIGIN`) are always preserved. For a different invariant set, edit
-  `is_auth`/`is_side` in `src/core/strip.rs`.
+- gasripper **never guesses a linker**: bytecode comes only from a compiler's own assembler
+  (`--emit-creation`) or exact `.hex`/`.bin` round-trips; symbolic `.asm` emits assembly text only.
+- Guards are found by **symbolic revert labels**, so stripping needs symbolic assembly (the sidecar
+  path); plain `.sol` disassembly has none and strips little.
+- **Safe only with a trusted caller** — auth (`CALLER`/`ORIGIN`) and side effects are always preserved.
 
 ## Development
 

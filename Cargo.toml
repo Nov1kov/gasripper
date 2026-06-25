@@ -3,6 +3,7 @@ name = "gasripper"
 version = "0.1.0"
 edition = "2024"
 description = "Super-aggressive gas optimizer for EVM bytecode and assembly"
+license = "MIT"
 
 [[bin]]
 name = "gasripper"
