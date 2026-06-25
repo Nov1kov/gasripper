@@ -1,0 +1,19 @@
+[package]
+name = "gasripper"
+version = "0.1.0"
+edition = "2024"
+description = "Super-aggressive gas optimizer for EVM bytecode and assembly"
+
+[[bin]]
+name = "gasripper"
+path = "src/main.rs"
+
+[dependencies]
+# Intentionally no external dependencies: CLI, config parser, and core are all on std.
+# This guarantees offline builds and predictable behavior for a gas-critical tool.
+
+[dev-dependencies]
+# Test-only: a real EVM to prove that stripped creation bytecode still deploys,
+# computes the same result, and costs less gas. Never linked into the binary, so
+# the shipped tool stays pure-std.
+revm = "41"
