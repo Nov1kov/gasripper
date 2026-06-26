@@ -106,9 +106,10 @@ mod tests {
         assert!(c.is_enabled("guards"), "the guards feature must default to enabled");
         assert!(c.is_enabled("shuffle"), "the shuffle feature must default to enabled");
         assert!(c.is_enabled("involution"), "the involution feature must default to enabled");
+        assert!(c.is_enabled("recompute"), "the recompute feature must default to enabled");
         assert_eq!(
             c.enabled_categories().len(),
-            3,
+            4,
             "every shipped category must be enabled by default"
         );
     }

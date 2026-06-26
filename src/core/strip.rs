@@ -21,7 +21,9 @@ const WINDOW: i64 = 48;
 /// opcode-sniffing label — the same calldata bounds check landed in different classes
 /// across compiler codegen — so it was merged into one honest feature). `Shuffle` is
 /// the always-safe stack-reschedule pass ([`crate::features::shuffle`]); `Involution`
-/// is the always-safe cancelling of involutive op pairs ([`crate::features::involution`]).
+/// is the always-safe cancelling of involutive op pairs ([`crate::features::involution`]);
+/// `Recompute` is the always-safe rewrite of a `DUP1` of a cheap result-invariant nullary
+/// opcode into a second copy of that opcode ([`crate::features::recompute`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Category {
     /// Any provably-safe revert guard.
@@ -30,6 +32,8 @@ pub enum Category {
     Shuffle,
     /// A run of an involutive op (`NOT`) collapsed to its net effect.
     Involution,
+    /// A `DUP1` of a cheap result-invariant nullary opcode recomputed as that opcode.
+    Recompute,
 }
 
 impl Category {
@@ -40,6 +44,7 @@ impl Category {
             Category::Guard => "guards",
             Category::Shuffle => "shuffle",
             Category::Involution => "involution",
+            Category::Recompute => "recompute",
         }
     }
 }

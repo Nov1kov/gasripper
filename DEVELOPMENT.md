@@ -88,13 +88,22 @@ gas 21784 → 21754 (saved 30 over 5 iterations) with the result unchanged and t
 153 → 151. A single-call `~(~x)` shrinks the bytecode too but shows no transaction-gas drop — its
 body runs below the EIP-7623 calldata floor — which is why the e2e (like `shuffle`'s) uses a loop.
 
+The `recompute` pass is proven the same way (`src/features/recompute/e2e.rs`) on both languages, with
+the creation bytecode the **same size** (a single-byte opcode swapped for another): solc 0.8.24 — the
+non-payable `CALLVALUE DUP1` guard that runs once per call is rewritten to a second `CALLVALUE`,
+dropping call gas 22103 → 22102; Vyper 0.4.3 venom — a per-iteration `CHAINID DUP1` in a loop body
+(`s += chain.id * chain.id`) is rewritten to a second `CHAINID`, dropping call gas 22099 → 22094 (−5
+over 5 iterations). Unlike the others it is length-preserving, so it also lowers gas on raw concrete
+`.hex`/`.bin` bytecode (`--emit-bytecode`), where no compiler relinks.
+
 ## Adding a feature
 
-A feature is one independent gas-reduction pass. Three ship today: `guards` (trusted-caller revert
+A feature is one independent gas-reduction pass. Four ship today: `guards` (trusted-caller revert
 removal, `src/features/guards/`), `shuffle` (always-safe stack rescheduling, `src/features/shuffle/`),
-and `involution` (always-safe `NOT NOT` cancelling, `src/features/involution/`) — each a reference
-module of `mod.rs` + `README.md` + `e2e.rs`. `shuffle` and `involution` show a pass need not be
-guard-removal: each owns its own `Category` and runs its own `scan` instead of `strip_guards`, and
+`involution` (always-safe `NOT NOT` cancelling, `src/features/involution/`), and `recompute`
+(always-safe `OP DUP1` → `OP OP` recompute, `src/features/recompute/`) — each a reference
+module of `mod.rs` + `README.md` + `e2e.rs`. `shuffle`, `involution`, and `recompute` show a pass need
+not be guard-removal: each owns its own `Category` and runs its own `scan` instead of `strip_guards`, and
 the orchestrator (`features::optimize`) runs every enabled pass and merges their edit spans (a later
 pass yields to an earlier one on an overlap, via `merge_nonoverlapping`). To add another pass, create
 a module, reuse the shared engine / sidecar / e2e harness (DRY — add new shared helpers to those,

@@ -6,7 +6,7 @@
 
 A Rust CLI tool that maximally optimizes an EVM contract for gas. The goal is to **not change
 execution logic** while shedding everything not needed for a bare run, using any provably-safe
-transformation that lowers gas. Three passes ship today:
+transformation that lowers gas. Four passes ship today:
 
 - **`guards`** — remove redundant revert guards (overflow/underflow, ABI/calldata bounds, range/cast
   asserts). Aggressive: safe **only** under a trusted caller (see the disclaimer).
@@ -15,9 +15,32 @@ transformation that lowers gas. Three passes ship today:
   caller.
 - **`involution`** — cancel runs of an involutive op (`NOT NOT` → nothing). **Always safe** — a value
   applied to its own inverse is the value, needing no trusted caller.
+- **`recompute`** — rewrite a `DUP1` of a cheap result-invariant nullary opcode into a second copy of
+  that opcode (`OP DUP1` → `OP OP`, e.g. `CALLVALUE DUP1`/`PUSH0 DUP1`). **Always safe** and
+  length-preserving — the one pass that also lowers gas on raw concrete bytecode.
 
 Fewer checks, cheaper stack juggling, and no wasted self-cancelling ops → less gas at execution time
 and smaller bytecode. The design leaves room for further gas-reducing passes.
+
+## Operating point: already-maximally-optimized input
+
+gasripper consumes the compiler's **already-optimized** symbolic assembly — *after* Vyper's venom
+(`OptimizationLevel.GAS`) or Solidity's optimizer. The classic peephole and redundant storage-access
+wins (e.g. ebso's load-then-store-back, a repeated `SLOAD` of the same slot, recompute-a-cheap-opcode
+vs. `DUP`) are **already eliminated by these optimizers**: on the latest compiler releases there are
+provably no further *straight-line* wins of that class — verified empirically, both compilers do
+common-subexpression elimination on straight-line storage reads and fold these peepholes, so the
+optimized assembly contains none of them. gasripper therefore targets only what the compiler cannot
+do (trusted-caller guard removal) or deliberately leaves on the table (non-minimal stack scheduling,
+self-cancelling ops).
+
+The latest compiler releases pinned and tested in CI/e2e — gasripper tracks the **latest** release of
+each language, driving the compiler's own assembler:
+
+| Toolchain | Pinned version |
+|---|---|
+| Vyper | 0.4.3 |
+| Solidity (solc) | 0.8.24 |
 
 ## How it works
 
@@ -55,14 +78,19 @@ gasripper makes two kinds of change, each with its own safety argument detailed 
   fall-through stack exactly and never touching auth (`CALLER`/`ORIGIN`) or side effects. Mechanism,
   the always-preserved sets, and post-strip dead-block cleanup:
   [`src/features/guards/README.md`](src/features/guards/README.md).
-- **`shuffle`** and **`involution`** — **always safe**: a pure stack reordering that changes no value
-  (`shuffle`, emitted only when provably equivalent and strictly cheaper) and the cancelling of an
-  op applied to its own inverse (`involution`, `NOT NOT` → nothing). Worked examples + soundness:
+- **`shuffle`**, **`involution`**, and **`recompute`** — **always safe**: a pure stack reordering that
+  changes no value (`shuffle`, emitted only when provably equivalent and strictly cheaper), the
+  cancelling of an op applied to its own inverse (`involution`, `NOT NOT` → nothing), and recomputing
+  a cheap result-invariant nullary opcode rather than `DUP`-ing it (`recompute`, `OP DUP1` → `OP OP`).
+  Worked examples + soundness:
   [`src/features/shuffle/README.md`](src/features/shuffle/README.md),
-  [`src/features/involution/README.md`](src/features/involution/README.md).
+  [`src/features/involution/README.md`](src/features/involution/README.md),
+  [`src/features/recompute/README.md`](src/features/recompute/README.md).
 
-All operate on symbolic assembly and are relinked by the compiler's own assembler — the binary never
-guesses a linker.
+`guards`, `shuffle`, and `involution` operate on symbolic assembly and are relinked by the compiler's
+own assembler — the binary never guesses a linker. `recompute` swaps one single-byte opcode for
+another (length-preserving), so it additionally runs on concrete `.hex`/`.bin` bytecode, where no
+relink is needed.
 
 ## Features
 
@@ -74,10 +102,11 @@ independently (**all enabled by default**). List them with `gasripper --list-fea
 | `guards` | strips all provably-safe revert guards — overflow/underflow, division-by-zero, ABI/calldata bounds, range/cast asserts | **required** (aggressive) | [`src/features/guards/README.md`](src/features/guards/README.md) |
 | `shuffle` | reschedules non-minimal `DUP`/`SWAP`/`POP` windows to a cheaper equivalent | not needed (always safe) | [`src/features/shuffle/README.md`](src/features/shuffle/README.md) |
 | `involution` | cancels runs of an involutive op (`NOT NOT` → nothing, odd runs → one `NOT`) | not needed (always safe) | [`src/features/involution/README.md`](src/features/involution/README.md) |
+| `recompute` | rewrites a `DUP1` of a cheap result-invariant nullary opcode into that opcode (`OP DUP1` → `OP OP`) | not needed (always safe) | [`src/features/recompute/README.md`](src/features/recompute/README.md) |
 
-`guards`, `shuffle`, and `involution` are independent passes — see each feature's README (linked
-above) for what it rewrites and why it is safe. Each README (module docs + unit tests + a real-EVM
-e2e) is the template a new pass follows; see [DEVELOPMENT.md](DEVELOPMENT.md).
+`guards`, `shuffle`, `involution`, and `recompute` are independent passes — see each feature's README
+(linked above) for what it rewrites and why it is safe. Each README (module docs + unit tests + a
+real-EVM e2e) is the template a new pass follows; see [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ### Disabling features
 
@@ -162,19 +191,6 @@ with the compiler's own assembler:
 
 A safety invariant guards every run: assembling with *no* deletions must reproduce the compiler's
 own bytecode byte-for-byte, otherwise the tool fails fast (a compiler-version drift).
-
-### Supported toolchain versions
-
-gasripper tracks the **latest** compiler release of each language — it drives the compiler's own
-assembler, so a new version is supported as soon as the baseline invariant above holds (which it
-verifies on every run). The versions currently pinned and tested in CI/e2e are:
-
-| Toolchain | Pinned version |
-|---|---|
-| Vyper | 0.4.3 |
-| Solidity (solc) | 0.8.24 |
-
-Point the tool at the right toolchain via the environment:
 
 ```bash
 # Vyper: a Python with `vyper` importable (tested on 0.4.3)

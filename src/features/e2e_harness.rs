@@ -104,6 +104,28 @@ pub fn assert_preserved_and_smaller(r: &Report, lang: &str, expected: u64, gas_b
     );
 }
 
+/// Assertions for a LENGTH-PRESERVING feature (`recompute`): the rewrite swaps one
+/// single-byte opcode for another, so the creation bytecode is **exactly the same size**
+/// while the call uses strictly less gas. At least one rewrite applied and behavior
+/// preserved. `gas_base`/`gas_opt` pin the exact measured call gas before and after, so
+/// any single-gas-unit drift fails the test.
+pub fn assert_same_size_cheaper(r: &Report, lang: &str, expected: u64, gas_base: u64, gas_opt: u64) {
+    assert!(r.stripped >= 1, "{lang}: expected at least one recompute rewrite");
+    assert_eq!(U256::from_be_slice(&r.out_base), U256::from(expected), "{lang}: wrong result");
+    assert_eq!(r.out_base, r.out_opt, "{lang}: optimized output must match baseline");
+    assert_eq!(
+        r.bytes_after, r.bytes_before,
+        "{lang}: recompute must preserve bytecode size: {} -> {}", r.bytes_before, r.bytes_after
+    );
+    assert!(r.gas_opt < r.gas_base, "{lang}: recompute should reduce call gas: {} -> {}", r.gas_base, r.gas_opt);
+    assert_eq!(r.gas_base, gas_base, "{lang}: baseline call gas drifted from pinned {gas_base} to {}", r.gas_base);
+    assert_eq!(r.gas_opt, gas_opt, "{lang}: optimized call gas drifted from pinned {gas_opt} to {}", r.gas_opt);
+    tracing::info!(
+        "{lang} (recompute): rewrote {}, call gas {} -> {} (saved {}), creation {} bytes (unchanged)",
+        r.stripped, r.gas_base, r.gas_opt, r.gas_saved(), r.bytes_after,
+    );
+}
+
 fn hex_to_bytes(s: &str) -> Vec<u8> {
     let s = s.strip_prefix("0x").unwrap_or(s);
     (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
