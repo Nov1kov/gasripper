@@ -6,16 +6,18 @@
 
 A Rust CLI tool that maximally optimizes an EVM contract for gas. The goal is to **not change
 execution logic** while shedding everything not needed for a bare run, using any provably-safe
-transformation that lowers gas. Two passes ship today:
+transformation that lowers gas. Three passes ship today:
 
 - **`guards`** — remove redundant revert guards (overflow/underflow, ABI/calldata bounds, range/cast
   asserts). Aggressive: safe **only** under a trusted caller (see the disclaimer).
 - **`shuffle`** — reschedule a compiler's non-minimal `DUP`/`SWAP`/`POP` windows to the cheapest
   equivalent. **Always safe** — a pure stack reordering that changes no value, needing no trusted
   caller.
+- **`involution`** — cancel runs of an involutive op (`NOT NOT` → nothing). **Always safe** — a value
+  applied to its own inverse is the value, needing no trusted caller.
 
-Fewer checks and cheaper stack juggling → less gas at execution time and smaller bytecode. The
-design leaves room for further gas-reducing passes.
+Fewer checks, cheaper stack juggling, and no wasted self-cancelling ops → less gas at execution time
+and smaller bytecode. The design leaves room for further gas-reducing passes.
 
 ## How it works
 
@@ -53,11 +55,13 @@ gasripper makes two kinds of change, each with its own safety argument detailed 
   fall-through stack exactly and never touching auth (`CALLER`/`ORIGIN`) or side effects. Mechanism,
   the always-preserved sets, and post-strip dead-block cleanup:
   [`src/features/guards/README.md`](src/features/guards/README.md).
-- **`shuffle`** — **always safe**: a pure stack reordering that changes no value, emitted only when
-  provably equivalent and strictly cheaper. Worked example + soundness:
-  [`src/features/shuffle/README.md`](src/features/shuffle/README.md).
+- **`shuffle`** and **`involution`** — **always safe**: a pure stack reordering that changes no value
+  (`shuffle`, emitted only when provably equivalent and strictly cheaper) and the cancelling of an
+  op applied to its own inverse (`involution`, `NOT NOT` → nothing). Worked examples + soundness:
+  [`src/features/shuffle/README.md`](src/features/shuffle/README.md),
+  [`src/features/involution/README.md`](src/features/involution/README.md).
 
-Both operate on symbolic assembly and are relinked by the compiler's own assembler — the binary never
+All operate on symbolic assembly and are relinked by the compiler's own assembler — the binary never
 guesses a linker.
 
 ## Features
@@ -69,10 +73,11 @@ independently (**all enabled by default**). List them with `gasripper --list-fea
 |---|---|---|---|
 | `guards` | strips all provably-safe revert guards — overflow/underflow, division-by-zero, ABI/calldata bounds, range/cast asserts | **required** (aggressive) | [`src/features/guards/README.md`](src/features/guards/README.md) |
 | `shuffle` | reschedules non-minimal `DUP`/`SWAP`/`POP` windows to a cheaper equivalent | not needed (always safe) | [`src/features/shuffle/README.md`](src/features/shuffle/README.md) |
+| `involution` | cancels runs of an involutive op (`NOT NOT` → nothing, odd runs → one `NOT`) | not needed (always safe) | [`src/features/involution/README.md`](src/features/involution/README.md) |
 
-`guards` and `shuffle` are independent passes — see each feature's README (linked above) for what it
-rewrites and why it is safe. Each README (module docs + unit tests + a real-EVM e2e) is the template
-a new pass follows; see [DEVELOPMENT.md](DEVELOPMENT.md).
+`guards`, `shuffle`, and `involution` are independent passes — see each feature's README (linked
+above) for what it rewrites and why it is safe. Each README (module docs + unit tests + a real-EVM
+e2e) is the template a new pass follows; see [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ### Disabling features
 

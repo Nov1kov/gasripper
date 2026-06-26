@@ -18,10 +18,12 @@ use crate::sidecar::{Backend, Lang};
 
 const AFTER_HELP: &str = "\
 FEATURES (all enabled by default):
-    guards   — strip provably-safe revert guards (overflow/underflow, calldata
-               bounds, range/cast asserts); safe only under a trusted caller
-    shuffle  — reschedule DUP/SWAP/POP windows to a cheaper equivalent (always
-               safe; symbolic input only)";
+    guards     — strip provably-safe revert guards (overflow/underflow, calldata
+                 bounds, range/cast asserts); safe only under a trusted caller
+    shuffle    — reschedule DUP/SWAP/POP windows to a cheaper equivalent (always
+                 safe; symbolic input only)
+    involution — cancel runs of an involutive op (NOT NOT -> nothing; always safe;
+                 symbolic input only)";
 
 /// Super-aggressive gas optimizer for EVM bytecode/assembly.
 #[derive(Parser, Debug)]

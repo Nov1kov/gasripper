@@ -82,14 +82,21 @@ The `shuffle` pass is proven the same way (`src/features/shuffle/e2e.rs`): a Vyp
 (`for i in range(n): s += i*i`) reschedules a window in the loop body, dropping call gas 22049 →
 22031 (saved 18 over 5 iterations) with the result unchanged and the creation bytecode 169 → 167.
 
+The `involution` pass is proven the same way (`src/features/involution/e2e.rs`): a Vyper 0.4.3 loop
+(`for i in range(n): s += ~(~i)`) cancels the `NOT NOT` venom leaves in the loop body, dropping call
+gas 21784 → 21754 (saved 30 over 5 iterations) with the result unchanged and the creation bytecode
+153 → 151. A single-call `~(~x)` shrinks the bytecode too but shows no transaction-gas drop — its
+body runs below the EIP-7623 calldata floor — which is why the e2e (like `shuffle`'s) uses a loop.
+
 ## Adding a feature
 
-A feature is one independent gas-reduction pass. Two ship today: `guards` (trusted-caller revert
-removal, `src/features/guards/`) and `shuffle` (always-safe stack rescheduling,
-`src/features/shuffle/`) — each a reference module of `mod.rs` + `README.md` + `e2e.rs`. `shuffle`
-shows a pass need not be guard-removal: it owns `Category::Shuffle`, runs its own engine
-(`core::stack::minimize_shuffle`) instead of `strip_guards`, and the orchestrator
-(`features::optimize`) runs both passes and merges their edit spans. To add another pass, create a
-module, reuse the shared engine / sidecar / e2e harness (DRY — add new shared helpers to those,
+A feature is one independent gas-reduction pass. Three ship today: `guards` (trusted-caller revert
+removal, `src/features/guards/`), `shuffle` (always-safe stack rescheduling, `src/features/shuffle/`),
+and `involution` (always-safe `NOT NOT` cancelling, `src/features/involution/`) — each a reference
+module of `mod.rs` + `README.md` + `e2e.rs`. `shuffle` and `involution` show a pass need not be
+guard-removal: each owns its own `Category` and runs its own `scan` instead of `strip_guards`, and
+the orchestrator (`features::optimize`) runs every enabled pass and merges their edit spans (a later
+pass yields to an earlier one on an overlap, via `merge_nonoverlapping`). To add another pass, create
+a module, reuse the shared engine / sidecar / e2e harness (DRY — add new shared helpers to those,
 don't inline), register its `META` in `features::registry()`, and run it from `features::optimize`.
 Keep the binary pure-`std` and warning-free.

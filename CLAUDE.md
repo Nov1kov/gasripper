@@ -106,11 +106,13 @@ Pipeline: **input frontend → instructions → `features::optimize` (feature-ga
   (no remaining reference + unreachable by fall-through), always-safe dead-code removal),
   `bytecode.rs`, `opcodes.rs`.
 - `src/features/` — one module per gas-reduction pass, each owning its `META` + a rewrite fn + tests.
-  Two today: `guards` (all revert-guard removal via `strip_guards`; the former `abi`/`math`/`assert`
-  split was a leaky opcode-sniff and was merged) and `shuffle` (always-safe stack-shuffle
-  rescheduling via `core::stack::minimize_shuffle`, symbolic input only). `features::optimize` runs
-  the enabled passes and merges their edit spans (overlapping shuffle spans are dropped). Add a pass:
-  a module here, register its `META` in `features::registry()`, and run it from `features::optimize`.
+  Three today: `guards` (all revert-guard removal via `strip_guards`; the former `abi`/`math`/`assert`
+  split was a leaky opcode-sniff and was merged), `shuffle` (always-safe stack-shuffle rescheduling
+  via `core::stack::minimize_shuffle`, symbolic input only), and `involution` (always-safe cancelling
+  of involutive op runs — `NOT NOT` → nothing — symbolic input only; venom leaves `NOT NOT` on
+  `~(~x)`, solc folds it). `features::optimize` runs the enabled passes and merges their edit spans
+  via `merge_nonoverlapping` (a later pass yields to an earlier one on overlap). Add a pass: a module
+  here, register its `META` in `features::registry()`, and run it from `features::optimize`.
 - `src/config.rs` — `FeatureConfig` with precedence defaults → config file → CLI; `enabled_categories()`
   feeds the engine.
 - `src/input/` — frontends produce `Loaded { instrs, symbolic, kind }`. `raw_asm`/`bytecode` are

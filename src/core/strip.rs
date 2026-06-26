@@ -20,13 +20,16 @@ const WINDOW: i64 = 48;
 /// revert-guard removal (the former `abi`/`math`/`assert` split was a fragile
 /// opcode-sniffing label — the same calldata bounds check landed in different classes
 /// across compiler codegen — so it was merged into one honest feature). `Shuffle` is
-/// the always-safe stack-reschedule pass ([`crate::features::shuffle`]).
+/// the always-safe stack-reschedule pass ([`crate::features::shuffle`]); `Involution`
+/// is the always-safe cancelling of involutive op pairs ([`crate::features::involution`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Category {
     /// Any provably-safe revert guard.
     Guard,
     /// A maximal `DUP`/`SWAP`/`POP` window rewritten to a cheaper equivalent.
     Shuffle,
+    /// A run of an involutive op (`NOT`) collapsed to its net effect.
+    Involution,
 }
 
 impl Category {
@@ -36,6 +39,7 @@ impl Category {
         match self {
             Category::Guard => "guards",
             Category::Shuffle => "shuffle",
+            Category::Involution => "involution",
         }
     }
 }

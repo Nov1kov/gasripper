@@ -105,10 +105,11 @@ mod tests {
         let c = FeatureConfig::defaults();
         assert!(c.is_enabled("guards"), "the guards feature must default to enabled");
         assert!(c.is_enabled("shuffle"), "the shuffle feature must default to enabled");
+        assert!(c.is_enabled("involution"), "the involution feature must default to enabled");
         assert_eq!(
             c.enabled_categories().len(),
-            2,
-            "both shipped categories must be enabled by default"
+            3,
+            "every shipped category must be enabled by default"
         );
     }
 

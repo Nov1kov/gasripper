@@ -20,6 +20,7 @@ use crate::core::{Category, Instr, Span, apply_spans, strip_guards};
 #[cfg(test)]
 pub mod e2e_harness;
 pub mod guards;
+pub mod involution;
 pub mod shuffle;
 
 /// Feature metadata for the registry, CLI, and config.
@@ -39,7 +40,7 @@ pub struct FeatureMeta {
 
 /// The full registry of available features.
 pub fn registry() -> Vec<FeatureMeta> {
-    vec![guards::META, shuffle::META]
+    vec![guards::META, shuffle::META, involution::META]
 }
 
 /// Find a feature's metadata by key.
@@ -53,22 +54,35 @@ fn overlaps(a: &Span, b: &Span) -> bool {
     a.start <= b.end && b.start <= a.end
 }
 
+/// Add each candidate span to `spans` unless it overlaps one already accepted, then
+/// re-sort by start. Keeps the merged edit set non-overlapping (a later pass yields to
+/// an earlier one on a conflict), so [`apply_spans`] can splice deterministically.
+fn merge_nonoverlapping(spans: &mut Vec<Span>, candidates: Vec<Span>) {
+    for span in candidates {
+        if !spans.iter().any(|s| overlaps(&span, s)) {
+            spans.push(span);
+        }
+    }
+    spans.sort_by_key(|s| s.start);
+}
+
 /// Run the enabled passes over `instrs`, returning the rewritten program and every
 /// applied edit span (on original indices).
 ///
-/// Guard removal runs first. Stack-shuffle rescheduling runs only on symbolic
-/// programs — it changes instruction lengths and relies on the sidecar/compiler to
-/// relink jumps, which the concrete-bytecode path cannot do. A shuffle span that
-/// overlaps a guard span is dropped, so the merged edit set stays non-overlapping.
+/// Guard removal runs first. The always-safe length-changing passes — stack-shuffle
+/// rescheduling and involution cancelling — run only on symbolic programs: they change
+/// instruction lengths and rely on the sidecar/compiler to relink jumps, which the
+/// concrete-bytecode path cannot do. A later pass's span that overlaps one already
+/// accepted is dropped, so the merged edit set stays non-overlapping.
 pub fn optimize(instrs: &[Instr], enabled: &HashSet<Category>) -> (Vec<Instr>, Vec<Span>) {
     let (_, mut spans) = strip_guards(instrs, enabled);
-    if enabled.contains(&Category::Shuffle) && is_symbolic(instrs) {
-        for span in shuffle::scan(instrs) {
-            if !spans.iter().any(|g| overlaps(&span, g)) {
-                spans.push(span);
-            }
+    if is_symbolic(instrs) {
+        if enabled.contains(&Category::Shuffle) {
+            merge_nonoverlapping(&mut spans, shuffle::scan(instrs));
         }
-        spans.sort_by_key(|s| s.start);
+        if enabled.contains(&Category::Involution) {
+            merge_nonoverlapping(&mut spans, involution::scan(instrs));
+        }
     }
     (apply_spans(instrs, &spans), spans)
 }
@@ -99,5 +113,24 @@ mod tests {
         assert!(!is_symbolic(&p), "the test program must be concrete for this invariant");
         let (_out, spans) = optimize(&p, &only(Category::Shuffle));
         assert!(spans.is_empty(), "shuffle wrongly rewrote a concrete program (would break jumps)");
+    }
+
+    #[test]
+    fn involution_fires_on_symbolic_program() {
+        // A symbolic label makes the program relinkable, so the NOT pair is cancelled.
+        let p = parse_str("_sym_x JUMPDEST NOT NOT STOP");
+        let (_out, spans) = optimize(&p, &only(Category::Involution));
+        assert_eq!(spans.len(), 1, "a cancelling NOT pair in a symbolic program was not removed");
+        assert_eq!(spans[0].category, Category::Involution, "the span must carry the Involution category");
+    }
+
+    #[test]
+    fn involution_never_fires_on_concrete_bytecode() {
+        // A fully concrete program: cancelling the NOT pair would shift JUMPDEST offsets
+        // with no linker to fix them, so the pass must skip it.
+        let p = parse_str("PUSH1 1 NOT NOT PUSH1 2");
+        assert!(!is_symbolic(&p), "the test program must be concrete for this invariant");
+        let (_out, spans) = optimize(&p, &only(Category::Involution));
+        assert!(spans.is_empty(), "involution wrongly rewrote a concrete program (would break jumps)");
     }
 }
