@@ -16,21 +16,27 @@ use super::stack::strip_residue;
 /// Maximum length of the suffix analyzed before a revert JUMPI.
 const WINDOW: i64 = 48;
 
-/// The class of a strippable check. A single category: every provably-safe revert
-/// guard is one and the same removal. (The former `abi`/`math`/`assert` split was a
-/// fragile opcode-sniffing label — the same calldata bounds check landed in different
-/// classes across compiler codegen — so it was merged into one honest feature.)
+/// The class of a gas-reducing rewrite a feature owns. `Guard` is the trusted-caller
+/// revert-guard removal (the former `abi`/`math`/`assert` split was a fragile
+/// opcode-sniffing label — the same calldata bounds check landed in different classes
+/// across compiler codegen — so it was merged into one honest feature). `Shuffle` is
+/// the always-safe stack-reschedule pass ([`crate::features::shuffle`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Category {
     /// Any provably-safe revert guard.
     Guard,
+    /// A maximal `DUP`/`SWAP`/`POP` window rewritten to a cheaper equivalent.
+    Shuffle,
 }
 
 impl Category {
     /// A stable key for the CLI/config.
     #[inline]
     pub fn key(self) -> &'static str {
-        "guards"
+        match self {
+            Category::Guard => "guards",
+            Category::Shuffle => "shuffle",
+        }
     }
 }
 
@@ -244,8 +250,8 @@ fn dead_revert_spans(instrs: &[Instr], referenced: &HashSet<String>) -> Vec<Span
 }
 
 /// Rewrite `instrs` by replacing each span `[start, end]` with its `replacement` ops.
-/// Spans are non-overlapping and ordered (each ends at its own `JUMPI`).
-fn apply_spans(instrs: &[Instr], spans: &[Span]) -> Vec<Instr> {
+/// Spans must be non-overlapping; they are applied in `start` order.
+pub(crate) fn apply_spans(instrs: &[Instr], spans: &[Span]) -> Vec<Instr> {
     let mut out = Vec::new();
     let mut i = 0usize;
     let mut it = spans.iter().peekable();

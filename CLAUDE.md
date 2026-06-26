@@ -96,7 +96,7 @@ Rule: whenever you change a feature, you MUST check and update its own documenta
 
 ## Architecture
 
-Pipeline: **input frontend → instructions → strip engine (feature-gated) → report / emit**.
+Pipeline: **input frontend → instructions → `features::optimize` (feature-gated passes) → report / emit**.
 
 - `src/core/` — `asm.rs` (the `Instr` representation + parser), `stack.rs::strip_residue` (the
   safety criterion: a guard is removable only if its fall-through stack keeps live values intact,
@@ -105,9 +105,12 @@ Pipeline: **input frontend → instructions → strip engine (feature-gated) →
   post-strip DCE — `dead_revert_spans` deletes any `_sym_*revert*` block orphaned by the strip
   (no remaining reference + unreachable by fall-through), always-safe dead-code removal),
   `bytecode.rs`, `opcodes.rs`.
-- `src/features/` — one module per gas-reduction pass, each owning its `META` + `strip()` + tests.
-  There is one today, `guards` (all revert-guard removal; the former `abi`/`math`/`assert` split was
-  a leaky opcode-sniff and was merged). Add a pass: a module here, register it in `features::registry()`.
+- `src/features/` — one module per gas-reduction pass, each owning its `META` + a rewrite fn + tests.
+  Two today: `guards` (all revert-guard removal via `strip_guards`; the former `abi`/`math`/`assert`
+  split was a leaky opcode-sniff and was merged) and `shuffle` (always-safe stack-shuffle
+  rescheduling via `core::stack::minimize_shuffle`, symbolic input only). `features::optimize` runs
+  the enabled passes and merges their edit spans (overlapping shuffle spans are dropped). Add a pass:
+  a module here, register its `META` in `features::registry()`, and run it from `features::optimize`.
 - `src/config.rs` — `FeatureConfig` with precedence defaults → config file → CLI; `enabled_categories()`
   feeds the engine.
 - `src/input/` — frontends produce `Loaded { instrs, symbolic, kind }`. `raw_asm`/`bytecode` are

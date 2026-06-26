@@ -11,15 +11,17 @@ use tracing_subscriber::EnvFilter;
 use crate::config::FeatureConfig;
 use crate::core::asm::render;
 use crate::core::bytecode::{assemble, bytes_to_hex};
-use crate::core::{Span, strip_guards};
-use crate::features;
+use crate::core::Span;
+use crate::features::{self, optimize};
 use crate::input::{self, InputKind, Loaded};
 use crate::sidecar::{Backend, Lang};
 
 const AFTER_HELP: &str = "\
 FEATURES (all enabled by default):
-    guards  — strip provably-safe revert guards (overflow/underflow, calldata
-              bounds, range/cast asserts)";
+    guards   — strip provably-safe revert guards (overflow/underflow, calldata
+               bounds, range/cast asserts); safe only under a trusted caller
+    shuffle  — reschedule DUP/SWAP/POP windows to a cheaper equivalent (always
+               safe; symbolic input only)";
 
 /// Super-aggressive gas optimizer for EVM bytecode/assembly.
 #[derive(Parser, Debug)]
@@ -131,7 +133,7 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
     let loaded = input::load(&input, cli.input_kind, cli.evm_version.as_deref())?;
 
     let enabled = config.enabled_categories();
-    let (optimized, spans) = strip_guards(&loaded.instrs, &enabled);
+    let (optimized, spans) = optimize(&loaded.instrs, &enabled);
 
     print_report(&loaded, &spans, &config, cli.emit_asm.is_some());
 
@@ -194,7 +196,7 @@ fn emit_creation(
     let dump = backend.dump(input, evm)?;
     // 2. Decide what to strip with the enabled categories.
     let enabled = config.enabled_categories();
-    let (_optimized, spans) = strip_guards(&dump.instrs, &enabled);
+    let (_optimized, spans) = optimize(&dump.instrs, &enabled);
     // 3. Re-assemble creation bytecode with those guards removed/rewritten.
     let built = backend.build(input, &spans, evm)?;
 

@@ -27,9 +27,10 @@ Two layers:
 - **Unit tests** (`src/features/*`, `src/core/*`) pin down, with hand-written assembly, exactly
   which pattern each feature strips and which it preserves (auth / side effects / inputs-consuming
   checks). They need no compilers and always run.
-- **End-to-end tests** (`src/features/guards/e2e.rs`) prove the optimization on a **real EVM**
-  (`revm`): compile a contract, strip the guards, re-assemble creation bytecode, deploy the baseline
-  and optimized bytecode, call a function on each, and assert the result is unchanged while gas drops.
+- **End-to-end tests** (`src/features/<feature>/e2e.rs`) prove the optimization on a **real EVM**
+  (`revm`): compile a contract, run the feature's pass, re-assemble creation bytecode, deploy the
+  baseline and optimized bytecode, call a function on each, and assert the result is unchanged while
+  gas drops. `guards/e2e.rs` covers the guard strips; `shuffle/e2e.rs` covers stack rescheduling.
   They go through the shared harness [`src/features/e2e_harness.rs`](src/features/e2e_harness.rs)
   (`measure`, `deploy_then_call`, `deploy_and_call`, `assert_win`, `assert_preserved_and_smaller`,
   `assert_rejects_stranger`, `encode_call`, `write_temp`) — reused by every feature and both
@@ -77,10 +78,18 @@ representative auth rows (Vyper 0.4.3, solc 0.8.24):
 | `a * b`           | 23671 → 23633 gas | 23859 → 23809 gas |
 | range/cast guard  | 23479 → 23419 gas (`convert`) | 23617 → 23545 gas (`require`) |
 
+The `shuffle` pass is proven the same way (`src/features/shuffle/e2e.rs`): a Vyper 0.4.3 loop
+(`for i in range(n): s += i*i`) reschedules a window in the loop body, dropping call gas 22049 →
+22031 (saved 18 over 5 iterations) with the result unchanged and the creation bytecode 169 → 167.
+
 ## Adding a feature
 
-A feature is one independent gas-reduction pass; guard removal is the one shipped today and lives
-in `src/features/guards/` (the reference module: `mod.rs` + `README.md` + `e2e.rs`). To add another
-pass, create a module, reuse the shared engine / sidecar / e2e harness (DRY — add new shared helpers
-to those, don't inline), and register its `META` in `features::registry()`. Keep the binary
-pure-`std` and warning-free.
+A feature is one independent gas-reduction pass. Two ship today: `guards` (trusted-caller revert
+removal, `src/features/guards/`) and `shuffle` (always-safe stack rescheduling,
+`src/features/shuffle/`) — each a reference module of `mod.rs` + `README.md` + `e2e.rs`. `shuffle`
+shows a pass need not be guard-removal: it owns `Category::Shuffle`, runs its own engine
+(`core::stack::minimize_shuffle`) instead of `strip_guards`, and the orchestrator
+(`features::optimize`) runs both passes and merges their edit spans. To add another pass, create a
+module, reuse the shared engine / sidecar / e2e harness (DRY — add new shared helpers to those,
+don't inline), register its `META` in `features::registry()`, and run it from `features::optimize`.
+Keep the binary pure-`std` and warning-free.

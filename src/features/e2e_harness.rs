@@ -14,7 +14,8 @@
 use std::collections::HashSet;
 use std::io::Write;
 
-use crate::core::{Category, strip_guards};
+use crate::core::Category;
+use crate::features::optimize;
 use crate::sidecar::Backend;
 
 use revm::context::result::{ExecutionResult, Output};
@@ -192,9 +193,9 @@ pub fn measure(
     // 1. Compile + read runtime instructions (Err -> caller skips).
     let dump = backend.dump(source_path, None)?;
 
-    // 2. Strip only the requested category.
+    // 2. Run only the requested category's pass.
     let set: HashSet<Category> = [only].into_iter().collect();
-    let (_optimized, spans) = strip_guards(&dump.instrs, &set);
+    let (_optimized, spans) = optimize(&dump.instrs, &set);
 
     // 3. Re-assemble baseline and optimized creation bytecode.
     let base = backend.build(source_path, &[], None)?;

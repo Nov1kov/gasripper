@@ -104,7 +104,12 @@ mod tests {
     fn defaults_all_on() {
         let c = FeatureConfig::defaults();
         assert!(c.is_enabled("guards"), "the guards feature must default to enabled");
-        assert_eq!(c.enabled_categories().len(), 1, "exactly one category must be enabled by default");
+        assert!(c.is_enabled("shuffle"), "the shuffle feature must default to enabled");
+        assert_eq!(
+            c.enabled_categories().len(),
+            2,
+            "both shipped categories must be enabled by default"
+        );
     }
 
     #[test]

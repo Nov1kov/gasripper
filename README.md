@@ -6,9 +6,16 @@
 
 A Rust CLI tool that maximally optimizes an EVM contract for gas. The goal is to **not change
 execution logic** while shedding everything not needed for a bare run, using any provably-safe
-transformation that lowers gas. The technique shipped today is removing redundant revert guards
-(overflow/underflow, ABI/calldata bounds, range/cast asserts) — fewer checks → less gas at
-execution time and smaller bytecode — and the design leaves room for other gas-reducing passes.
+transformation that lowers gas. Two passes ship today:
+
+- **`guards`** — remove redundant revert guards (overflow/underflow, ABI/calldata bounds, range/cast
+  asserts). Aggressive: safe **only** under a trusted caller (see the disclaimer).
+- **`shuffle`** — reschedule a compiler's non-minimal `DUP`/`SWAP`/`POP` windows to the cheapest
+  equivalent. **Always safe** — a pure stack reordering that changes no value, needing no trusted
+  caller.
+
+Fewer checks and cheaper stack juggling → less gas at execution time and smaller bytecode. The
+design leaves room for further gas-reducing passes.
 
 ## How it works
 
@@ -37,55 +44,35 @@ flowchart LR
     classDef opt fill:#ffe1e1,stroke:#d33,stroke-width:2px,color:#000;
 ```
 
-## Safety model
+## Safety
 
-Everything rests on a stack criterion. For each `<cond> _sym_*revert* JUMPI`, gasripper grows the
-longest barrier-free suffix it can cut by **reproducing that run's live-stack residue** (simulated
-over slot-ids) — so the fall-through (non-reverting) stack is byte-for-byte unchanged, only the
-revert is gone:
+gasripper makes two kinds of change, each with its own safety argument detailed in its feature README:
 
-- a check that reads its inputs via `DUP`/`SWAP` is a stack **identity** → deleted outright;
-- a check that **consumes** its inputs (e.g. a Vyper `a + b` overflow assertion, which keeps the
-  `ADD` but consumes the spare operand) is replaced by the minimal `POP`/`SWAP` shuffle that
-  reproduces its residue — removing the comparison + branch + revert while keeping the stack and
-  the live computation intact.
+- **`guards`** — safe **only under a trusted caller** (see the disclaimer above): it removes checks
+  (overflow/underflow, bounds, range) that a trusted, well-formed caller never trips, reproducing the
+  fall-through stack exactly and never touching auth (`CALLER`/`ORIGIN`) or side effects. Mechanism,
+  the always-preserved sets, and post-strip dead-block cleanup:
+  [`src/features/guards/README.md`](src/features/guards/README.md).
+- **`shuffle`** — **always safe**: a pure stack reordering that changes no value, emitted only when
+  provably equivalent and strictly cheaper. Worked example + soundness:
+  [`src/features/shuffle/README.md`](src/features/shuffle/README.md).
 
-A run is removed only if its residue consists solely of input slots (it creates no value that
-survives into live code). Residue strips that *drop* a value are additionally refused when their
-straight-line block contains an auth (`CALLER`/`ORIGIN`) or side-effect opcode, so a `msg.sender`
-check or a call's success flag is never dropped.
-
-**Always preserved** (never stripped, regardless of enabled features):
-
-- authorization — any run touching `CALLER`/`ORIGIN` (`msg.sender == owner`);
-- side effects — `SSTORE`/`CALL`/`MSTORE`/`LOG*`/`RETURN`/…;
-- checks that consume their own input (not a stack identity — possible profit guards);
-- any suffix containing a label or a non-terminal `JUMP(I)`.
-
-Safe **only** under a trusted caller — see the disclaimer. The preservation sets `is_auth`/`is_side`
-live in `src/core/strip.rs`.
-
-After the strip, a `_sym_*revert*` block that lost its last reference and can no longer be reached by
-fall-through is deleted as dead code (always-safe — unreachable code cannot run; the compiler's
-assembler relinks the rest). A block still targeted by a preserved guard (e.g. an auth check) keeps
-its reference and stays.
+Both operate on symbolic assembly and are relinked by the compiler's own assembler — the binary never
+guesses a linker.
 
 ## Features
 
 A feature is one independent gas-reduction pass, lives in its own module, and is toggled
-independently (**all enabled by default**). Every feature shipped today removes one class of guard,
-but a feature is not required to be guard-removal — any provably-safe gas saving qualifies. List
-them with `gasripper --list-features`.
+independently (**all enabled by default**). List them with `gasripper --list-features`.
 
-| Key | Strips | Docs |
-|---|---|---|
-| `guards` | all provably-safe revert guards — overflow/underflow, division-by-zero, ABI/calldata bounds, range/cast asserts | [`src/features/guards/README.md`](src/features/guards/README.md) |
+| Key | Does | Trusted caller? | Docs |
+|---|---|---|---|
+| `guards` | strips all provably-safe revert guards — overflow/underflow, division-by-zero, ABI/calldata bounds, range/cast asserts | **required** (aggressive) | [`src/features/guards/README.md`](src/features/guards/README.md) |
+| `shuffle` | reschedules non-minimal `DUP`/`SWAP`/`POP` windows to a cheaper equivalent | not needed (always safe) | [`src/features/shuffle/README.md`](src/features/shuffle/README.md) |
 
-There is one feature today. The former `abi`/`math`/`assert` split was a fragile opcode-sniffing
-label (the same calldata bounds check landed in different classes across compiler codegen), so it
-was merged into this single honest feature. Its [README](src/features/guards/README.md) is the
-template (module docs + unit tests + a real-EVM e2e) a new pass follows; see
-[DEVELOPMENT.md](DEVELOPMENT.md).
+`guards` and `shuffle` are independent passes — see each feature's README (linked above) for what it
+rewrites and why it is safe. Each README (module docs + unit tests + a real-EVM e2e) is the template
+a new pass follows; see [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ### Disabling features
 
@@ -104,6 +91,7 @@ gasripper contract.asm --config gasripper.toml
 ```toml
 [features]
 guards = false
+shuffle = true
 ```
 
 By default **no config file is needed or searched for** — the tool runs on defaults alone (all

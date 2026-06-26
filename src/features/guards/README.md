@@ -85,9 +85,28 @@ analog of rewriting `a <op> b` as Vyper's `unsafe_<op>(a, b)` or wrapping it in 
 
 ## Safety
 
-Safe **only** under a trusted caller that always supplies well-formed calldata and in-range
-inputs. The removed run's live-stack residue is reproduced exactly, so the only behavioral change
-is "no longer revert on an input the trusted caller never sends".
+Safe **only** under a trusted caller that always supplies well-formed calldata and in-range inputs.
+
+Everything rests on a stack criterion. For each `<cond> _sym_*revert* JUMPI` gasripper grows the
+longest barrier-free suffix it can cut by **reproducing that run's live-stack residue** (simulated
+over slot-ids), so the fall-through (non-reverting) stack is byte-for-byte unchanged and only the
+revert is gone — a stack **identity** is deleted outright, a **consuming** check is replaced by the
+minimal `POP`/`SWAP` residue (the two cases under [patterns](#bytecode-patterns-before--after)). The
+only behavioral change is "no longer revert on an input the trusted caller never sends".
+
+A run is removed only if its residue consists solely of input slots (it creates no value that
+survives into live code). A residue strip that *drops* a value is additionally refused when its
+straight-line block contains an auth (`CALLER`/`ORIGIN`) or side-effect opcode, so a `msg.sender`
+check or a call's success flag is never dropped.
+
+**Always preserved** (regardless of enabled features):
+
+- authorization — any run touching `CALLER`/`ORIGIN` (`msg.sender == owner`);
+- side effects — `SSTORE`/`CALL`/`MSTORE`/`LOG*`/`RETURN`/…;
+- checks that consume their own input (not a stack identity — possible profit guards);
+- any suffix containing a label or a non-terminal `JUMP(I)`.
+
+The preservation sets `is_auth`/`is_side` live in [`src/core/strip.rs`](../../core/strip.rs).
 
 ## Measured (real EVM, revm — `e2e.rs`)
 
