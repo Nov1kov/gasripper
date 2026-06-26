@@ -65,6 +65,11 @@ check or a call's success flag is never dropped.
 Safe **only** under a trusted caller — see the disclaimer. The preservation sets `is_auth`/`is_side`
 live in `src/core/strip.rs`.
 
+After the strip, a `_sym_*revert*` block that lost its last reference and can no longer be reached by
+fall-through is deleted as dead code (always-safe — unreachable code cannot run; the compiler's
+assembler relinks the rest). A block still targeted by a preserved guard (e.g. an auth check) keeps
+its reference and stays.
+
 ## Features
 
 A feature is one independent gas-reduction pass, lives in its own module, and is toggled

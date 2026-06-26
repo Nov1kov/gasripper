@@ -8,7 +8,10 @@
 //! (`convert` / `require(a < 256)`), and with / without a trusted-caller wrapper.
 //! Each test SKIPS when its toolchain is unavailable.
 
-use crate::core::Category;
+use std::collections::HashSet;
+
+use crate::core::asm::Kind;
+use crate::core::{Category, strip_guards};
 use crate::features::e2e_harness::{
     assert_preserved_and_smaller, assert_rejects_stranger, assert_win, encode_call, measure, write_temp,
 };
@@ -27,9 +30,9 @@ fn vyper(auth: bool, sig: &str, ret: &str, ret_expr: &str) -> String {
 /// == owner)`. Auth reads storage (`view`); without it the function is `pure`.
 fn solidity(auth: bool, args: &str, body: &str) -> String {
     if auth {
-        format!("// SPDX-License-Identifier: MIT\npragma solidity ^0.8.20;\ncontract C {{\n    address public owner;\n    constructor() {{ owner = msg.sender; }}\n    function foo({args}) external view returns (uint256) {{\n        require(msg.sender == owner);\n        {body}\n    }}\n}}\n")
+        format!("pragma solidity ^0.8.20;\ncontract C {{\n    address public owner;\n    constructor() {{ owner = msg.sender; }}\n    function foo({args}) external view returns (uint256) {{\n        require(msg.sender == owner);\n        {body}\n    }}\n}}\n")
     } else {
-        format!("// SPDX-License-Identifier: MIT\npragma solidity ^0.8.20;\ncontract C {{\n    function foo({args}) external pure returns (uint256) {{\n        {body}\n    }}\n}}\n")
+        format!("pragma solidity ^0.8.20;\ncontract C {{\n    function foo({args}) external pure returns (uint256) {{\n        {body}\n    }}\n}}\n")
     }
 }
 
@@ -69,6 +72,43 @@ const ARG2: &str = "a: uint256, b: uint256";
 const SARG2: &str = "uint256 a, uint256 b";
 const SIG2: &str = "foo(uint256,uint256)";
 const SIG1: &str = "foo(uint256)";
+
+// --- Post-strip DCE: a real contract's orphaned revert handler is removed ---
+
+#[test]
+fn vyper_dce_cuts_the_real_revert_handler() {
+    // On a REAL compiled contract (not hand-written asm): a plain `a + b` shares ONE
+    // compiler revert handler (`_sym___revert: PUSH0 DUP1 REVERT`) that every guard
+    // branches to on failure (selector mismatch, calldata bounds, overflow). Stripping
+    // all those guards orphans it, and post-strip DCE must select that very block for
+    // deletion — proving the hand-asm unit tests match real compiler output. Behavior
+    // and gas on a real EVM are already proven for this contract by `vyper_add_no_auth`.
+    let path = write_temp("g_vy_dce.vy", &vyper(false, ARG2, "uint256", "a + b"));
+    let dump = match vy().dump(&path, None) {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!("SKIP vyper DCE e2e (toolchain unavailable): {e}");
+            return;
+        }
+    };
+
+    let only: HashSet<Category> = [Category::Guard].into_iter().collect();
+    let (opt, spans) = strip_guards(&dump.instrs, &only);
+
+    // One stripped span starts at the revert label — the orphaned handler block, deleted
+    // outright (a guard span instead ends at its JUMPI and is never a Label start).
+    let handler = spans
+        .iter()
+        .find(|s| dump.instrs[s.start].kind == Kind::Label && dump.instrs[s.start].mnem().contains("revert"))
+        .expect("DCE did not select the orphaned revert handler block for deletion");
+    let block: Vec<&str> = dump.instrs[handler.start..=handler.end].iter().map(|i| i.mnem()).collect();
+    assert_eq!(block.last(), Some(&"REVERT"), "the deleted block is not a revert handler: {block:?}");
+    assert!(handler.replacement.is_empty(), "the dead revert handler must be deleted, not replaced");
+    assert!(
+        !opt.iter().any(|i| i.kind == Kind::Label && i.mnem().contains("revert")),
+        "a revert handler label survived DCE in the optimized stream"
+    );
+}
 
 // --- Vyper, trusted-caller (auth) ---
 

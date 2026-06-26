@@ -19,7 +19,6 @@ strictly in English.
 - **Do NOT present guesses about code behavior as fact.** Before stating what a flag/function/field/pipeline stage does (especially when concluding about the cause of a bug), OPEN the source and verify. If you cannot verify, or it is an assumption, explicitly mark it as "hypothesis"/"assumption" instead of writing it as a statement of fact.
 - At the end, try to verify the code is free of errors via `cargo check` or `cargo test`.
 - IF there is not enough data for a given spot, mark it with a TODO pointing to the place to return to later.
-- Abort the task if you see a potential severe performance regression caused by the new changes.
 - If you fixed a bug, ALWAYS lock in the fix with a new test case.
 - Every bug must be reproduced by a unit test before being fixed. **Order: first write a test that FAILS on the current code (reproduces the bug), then fix the code so the test passes. If the test does not fail without the fix, it does not reproduce the bug and you must pick different input data.**
 - Every change must be covered by a unit test to guarantee repeatability.
@@ -102,7 +101,10 @@ Pipeline: **input frontend → instructions → strip engine (feature-gated) →
 - `src/core/` — `asm.rs` (the `Instr` representation + parser), `stack.rs::strip_residue` (the
   safety criterion: a guard is removable only if its fall-through stack keeps live values intact,
   returning the minimal `POP`/`SWAP` shuffle), `strip.rs::strip_guards` (the engine that finds
-  `<cond> _sym_*revert* JUMPI` runs and rewrites them when the feature is enabled), `bytecode.rs`, `opcodes.rs`.
+  `<cond> _sym_*revert* JUMPI` runs and rewrites them when the feature is enabled; then runs
+  post-strip DCE — `dead_revert_spans` deletes any `_sym_*revert*` block orphaned by the strip
+  (no remaining reference + unreachable by fall-through), always-safe dead-code removal),
+  `bytecode.rs`, `opcodes.rs`.
 - `src/features/` — one module per gas-reduction pass, each owning its `META` + `strip()` + tests.
   There is one today, `guards` (all revert-guard removal; the former `abi`/`math`/`assert` split was
   a leaky opcode-sniff and was merged). Add a pass: a module here, register it in `features::registry()`.

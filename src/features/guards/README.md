@@ -52,6 +52,27 @@ PUSH1 5 GT R JUMPI                      →   POP
 The `a * b` overflow check (`product / a == b`, an inverse idiom carrying `DIV`/`EQ`/`OR`) is the
 same consuming case — its run is replaced by the residue that keeps the product on the stack.
 
+## Post-strip dead-block elimination (DCE)
+
+Removing the guards above deletes the `<cond> _sym_*revert* JUMPI` runs that jumped to a
+revert block. When a shared `_sym_*revert*` block loses its **last** reference, it becomes
+unreachable dead weight. After the strip, gasripper deletes any `_sym_*revert*` block that
+(1) is no longer the target of a remaining `PushSym`/`_OFST`, and (2) cannot be reached by
+fall-through (its predecessor halts — `RETURN`/`REVERT`/… — or is an unconditional `JUMP`):
+
+```text
+... RETURN  _sym___revert: JUMPDEST PUSH0 DUP1 REVERT   →   ... RETURN
+            └─ no JUMPI targets it after the strip ─┘        (block deleted)
+```
+
+This is **always-safe** (deleting unreachable code cannot change execution) and the compiler's
+own assembler relinks the surviving jumps. A revert block still reached by a NON-stripped guard
+(e.g. an auth `assert msg.sender == owner`) keeps its reference and is preserved.
+
+Solidity is unaffected by this pass: its revert blocks are labelled `_sym_tag_*` (no `revert`
+substring), and its `require`-form (inverse-idiom) inline reverts are already dropped during the
+strip by the solc sidecar.
+
 ## One feature, not three
 
 Earlier versions split this into `abi` / `math` / `assert` by sniffing which opcodes sat in the
@@ -80,11 +101,7 @@ solc 0.8.24), result unchanged:
 | Solidity `a - b` (auth) | 23843 → 23793 | `Panic(0x11)` underflow guard removed |
 | Solidity `require(a < 256)` (auth) | 23617 → 23545 | range check removed |
 
-No-auth single-function contracts show a bytecode win (the guard is off the hot path).
-
-## Files
-
-| File | Purpose |
-|---|---|
-| `mod.rs` | `META`, `strip()`, pattern unit tests |
-| `e2e.rs` | real-EVM proofs (18 cases) via `features::e2e_harness` |
+No-auth single-function contracts show a bytecode win (the guard is off the hot path); when the
+strip orphans the shared revert block, post-strip DCE removes it too — e.g. a Vyper
+`convert(data, uint256)` contract goes 142 → 120 bytes from the guard strip, then 142 → 116 with
+the orphaned `_sym___revert` block eliminated.

@@ -176,7 +176,71 @@ pub fn strip_guards(instrs: &[Instr], enabled: &HashSet<Category>) -> (Vec<Instr
         j += 1;
     }
 
+    // Post-strip DCE: a revert block whose last reference was just removed is now
+    // unreachable dead weight (the compiler relinks remaining jumps), so delete it.
+    if !spans.is_empty() {
+        let referenced = referenced_syms(&apply_spans(instrs, &spans));
+        let mut dead = dead_revert_spans(instrs, &referenced);
+        if !dead.is_empty() {
+            spans.append(&mut dead);
+            spans.sort_by_key(|s| s.start);
+        }
+    }
+
     (apply_spans(instrs, &spans), spans)
+}
+
+/// Symbols still pushed as a jump target (`PushSym`) or referenced via an offset
+/// (`_OFST sym n`) in `instrs` — i.e. labels that remain reachable by a jump.
+fn referenced_syms(instrs: &[Instr]) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for ins in instrs {
+        match ins.kind {
+            Kind::PushSym => {
+                out.insert(ins.mnem().to_string());
+            }
+            Kind::Ofst => {
+                if let Some(sym) = ins.tokens.get(1) {
+                    out.insert(sym.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// `instrs[i-1]` cannot fall through into `instrs[i]` (it halts or jumps away), so a
+/// label at `i` is reachable only by a jump to it.
+fn unreachable_by_fallthrough(instrs: &[Instr], i: usize) -> bool {
+    if i == 0 {
+        return false;
+    }
+    let pred = &instrs[i - 1];
+    pred.kind == Kind::Op && (is_terminal(pred.mnem()) || pred.mnem() == "JUMP")
+}
+
+/// Delete spans for `_sym_*revert*` blocks that no remaining jump targets and cannot be
+/// reached by fall-through — orphaned by the guard strip above. The block runs from its
+/// label to just before the next label (or end of program). Solidity's revert blocks are
+/// labelled `_sym_tag_*` (no "revert" substring), so this is a no-op there; its inverse-
+/// idiom inline reverts are already dropped during the strip by the sidecar.
+fn dead_revert_spans(instrs: &[Instr], referenced: &HashSet<String>) -> Vec<Span> {
+    let mut out = Vec::new();
+    for i in 0..instrs.len() {
+        if instrs[i].kind != Kind::Label || !instrs[i].mnem().to_lowercase().contains("revert") {
+            continue;
+        }
+        if referenced.contains(instrs[i].mnem()) || !unreachable_by_fallthrough(instrs, i) {
+            continue;
+        }
+        let end = instrs[i + 1..]
+            .iter()
+            .position(|x| x.kind == Kind::Label)
+            .map_or(instrs.len() - 1, |off| i + off);
+        out.push(Span { start: i, end, category: Category::Guard, replacement: Vec::new() });
+    }
+    out
 }
 
 /// Rewrite `instrs` by replacing each span `[start, end]` with its `replacement` ops.
@@ -265,6 +329,40 @@ mod tests {
         let (_out, spans) = strip_guards(&p, &all_categories());
         assert_eq!(spans.len(), 1, "overflow guard after a deploy-header RETURN was not stripped");
         assert_eq!(spans[0].category, Category::Guard, "a stripped guard must carry the single Guard category");
+    }
+
+    #[test]
+    fn orphaned_revert_block_is_eliminated() {
+        // After a guard is stripped, the shared `_sym_*revert*` block it jumped to
+        // loses its last reference and becomes unreachable (its predecessor RETURN is
+        // terminal). Post-strip DCE must delete that dead block as well.
+        let src = format!(
+            "DUP1 CALLDATALOAD PUSH1 32 LT {REV} JUMPI PUSH1 0 PUSH1 0 RETURN \
+             {REV} JUMPDEST PUSH0 DUP1 REVERT"
+        );
+        let (flat, spans) = strip_all(&src);
+        assert_eq!(spans.len(), 2, "the orphaned revert block was not removed alongside its guard");
+        assert!(!flat.contains(&"REVERT".to_string()), "the dead revert body survived DCE");
+        assert!(
+            !flat.iter().any(|m| m.contains("revert")),
+            "the orphaned revert label survived DCE"
+        );
+    }
+
+    #[test]
+    fn referenced_revert_block_is_kept() {
+        // A second, NON-stripped guard (auth) still jumps to the same revert label, so
+        // the block is still reachable and must NOT be deleted.
+        let src = format!(
+            "DUP1 CALLDATALOAD PUSH1 32 LT {REV} JUMPI CALLER PUSH1 1 XOR {REV} JUMPI \
+             PUSH1 0 PUSH1 0 RETURN {REV} JUMPDEST PUSH0 DUP1 REVERT"
+        );
+        let (flat, _spans) = strip_all(&src);
+        assert!(
+            flat.iter().any(|m| m.contains("revert")),
+            "a revert block still targeted by a live auth guard was wrongly deleted"
+        );
+        assert!(flat.contains(&"REVERT".to_string()), "the live revert body was wrongly deleted");
     }
 
     #[test]
