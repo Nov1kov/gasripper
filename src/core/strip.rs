@@ -34,6 +34,8 @@ pub enum Category {
     Involution,
     /// A `DUP1` of a cheap result-invariant nullary opcode recomputed as that opcode.
     Recompute,
+    /// A constant `PUSH a PUSH b SHL/SHR` precomputed to a single push of the result.
+    FoldShift,
 }
 
 impl Category {
@@ -45,6 +47,7 @@ impl Category {
             Category::Shuffle => "shuffle",
             Category::Involution => "involution",
             Category::Recompute => "recompute",
+            Category::FoldShift => "foldshift",
         }
     }
 }
@@ -259,7 +262,9 @@ fn dead_revert_spans(instrs: &[Instr], referenced: &HashSet<String>) -> Vec<Span
 }
 
 /// Rewrite `instrs` by replacing each span `[start, end]` with its `replacement` ops.
-/// Spans must be non-overlapping; they are applied in `start` order.
+/// Spans must be non-overlapping; they are applied in `start` order. A replacement
+/// token may be a bare opcode (`POP`/`SWAP1`/…) or a folded push literal encoded as
+/// `#<hex>` (see [`super::asm::replacement_instr`]).
 pub(crate) fn apply_spans(instrs: &[Instr], spans: &[Span]) -> Vec<Instr> {
     let mut out = Vec::new();
     let mut i = 0usize;
@@ -268,7 +273,7 @@ pub(crate) fn apply_spans(instrs: &[Instr], spans: &[Span]) -> Vec<Instr> {
         if let Some(sp) = it.peek() {
             if sp.start == i {
                 for op in &sp.replacement {
-                    out.push(Instr::new(Kind::Op, vec![op.clone()]));
+                    out.push(super::asm::replacement_instr(op));
                 }
                 i = sp.end + 1;
                 it.next();

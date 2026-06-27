@@ -21,9 +21,12 @@
 //!      untouched; a baseline mismatch is a hard error in the sidecar).
 //!
 //! Protocol (stdout):
-//!   dump  -> `REF 0x<hex>` then one `INSTR <kind> <mnem>` line per instruction.
+//!   dump  -> `REF 0x<hex>` then one `INSTR <kind> <mnem> [value]` line per instruction.
+//!            A concrete literal push carries its `0x..` immediate (the fold pass needs it);
+//!            value-less pushes are symbolic / linker-resolved and never folded.
 //!   build -> `CREATION 0x<hex>` / `REFERENCE 0x<hex>` / `BYTES_BEFORE n` /
-//!            `BYTES_AFTER n`. Delete indices are passed comma-separated.
+//!            `BYTES_AFTER n`. Delete indices are passed comma-separated; a `#<hex>` edit
+//!            op is a folded push literal the sidecar emits as a single push.
 //!
 //! Resolution via environment (so the tool can be pointed at the right toolchain):
 //!   * `GASRIPPER_VYPER_PYTHON` / `GASRIPPER_VYPER_SIDECAR`;
@@ -139,10 +142,11 @@ impl Backend {
             if let Some(rest) = line.strip_prefix("REF ") {
                 reference_hex = Some(rest.trim().to_string());
             } else if let Some(rest) = line.strip_prefix("INSTR ") {
-                let mut it = rest.splitn(2, ' ');
+                let mut it = rest.splitn(3, ' ');
                 let kind = it.next().unwrap_or("");
                 let mnem = it.next().unwrap_or("").trim();
-                instrs.push(descriptor_to_instr(kind, mnem)?);
+                let value = it.next().map(|v| v.trim()).filter(|v| !v.is_empty());
+                instrs.push(descriptor_to_instr(kind, mnem, value)?);
             }
         }
         let reference_hex = reference_hex.ok_or("sidecar dump: missing REF line")?;
@@ -177,13 +181,18 @@ impl Backend {
     }
 }
 
-/// Map a `kind mnem` descriptor to an [`Instr`]. Immediate values are irrelevant
-/// to the strip engine (it reasons over stack arity and mnemonics), so PUSH/OFST
-/// carry placeholder tokens. Shared by every language backend.
-fn descriptor_to_instr(kind: &str, mnem: &str) -> Result<Instr, String> {
+/// Map a `kind mnem [value]` descriptor to an [`Instr`]. The strip engine reasons over
+/// stack arity and mnemonics, so most immediates are irrelevant and carry placeholders.
+/// A concrete literal push carries its real `value` (a `0x..` immediate) — the fold pass
+/// needs it to precompute a constant shift; a value-less push is symbolic/linker-resolved
+/// and stays a non-literal (so it is never folded). Shared by every language backend.
+fn descriptor_to_instr(kind: &str, mnem: &str, value: Option<&str>) -> Result<Instr, String> {
     let i = match kind {
         "op" => Instr::new(Kind::Op, vec![mnem.into()]),
-        "push" => Instr::new(Kind::Push, vec![mnem.into(), "0".into()]),
+        "push" => match value {
+            Some(v) => Instr::new(Kind::Push, vec![mnem.into(), v.into()]),
+            None => Instr::new(Kind::Push, vec![mnem.into()]),
+        },
         "pushsym" => Instr::new(Kind::PushSym, vec![mnem.into()]),
         "pushmem" => Instr::new(Kind::PushMem, vec![mnem.into()]),
         "ofst" => Instr::new(Kind::Ofst, vec![mnem.into(), "0".into(), "0".into()]),

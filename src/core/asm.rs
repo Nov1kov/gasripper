@@ -142,6 +142,31 @@ pub fn mnemonics(instrs: &[Instr]) -> Vec<String> {
     instrs.iter().map(|ins| ins.mnem().to_string()).collect()
 }
 
+/// The concrete immediate of a literal push (`PUSHn <int>`), or `None` for a
+/// value-less / symbolic push. Used by the fold pass to spot a foldable constant.
+#[inline]
+pub fn push_literal_value(ins: &Instr) -> Option<&str> {
+    if ins.kind == Kind::Push {
+        if let Some(v) = ins.tokens.get(1) {
+            if is_int_literal(v) {
+                return Some(v);
+            }
+        }
+    }
+    None
+}
+
+/// Build the instruction for one [`crate::core::Span`] replacement token. A `#<hex>`
+/// token is a folded push literal (`#01..` -> `PUSH21 0x01..`); any other token is a
+/// bare opcode mnemonic. The push size is the minimal byte length of the literal.
+pub fn replacement_instr(op: &str) -> Instr {
+    if let Some(hex) = op.strip_prefix('#') {
+        let n = hex.len().div_ceil(2);
+        return Instr::new(Kind::Push, vec![format!("PUSH{n}"), format!("0x{hex}")]);
+    }
+    Instr::new(Kind::Op, vec![op.to_string()])
+}
+
 /// Whether the program contains symbolic elements that require linking
 /// (and are therefore not assemblable by our simple assembler without label resolution).
 pub fn is_symbolic(instrs: &[Instr]) -> bool {

@@ -106,13 +106,16 @@ Pipeline: **input frontend → instructions → `features::optimize` (feature-ga
   (no remaining reference + unreachable by fall-through), always-safe dead-code removal),
   `bytecode.rs`, `opcodes.rs`.
 - `src/features/` — one module per gas-reduction pass, each owning its `META` + a rewrite fn + tests.
-  Four today: `guards` (all revert-guard removal via `strip_guards`; the former `abi`/`math`/`assert`
+  Five today: `guards` (all revert-guard removal via `strip_guards`; the former `abi`/`math`/`assert`
   split was a leaky opcode-sniff and was merged), `shuffle` (always-safe stack-shuffle rescheduling
   via `core::stack::minimize_shuffle`, symbolic input only), `involution` (always-safe cancelling
   of involutive op runs — `NOT NOT` → nothing — symbolic input only; venom leaves `NOT NOT` on
-  `~(~x)`, solc folds it), and `recompute` (always-safe `OP DUP1` → `OP OP` for a cheap result-invariant
+  `~(~x)`, solc folds it), `recompute` (always-safe `OP DUP1` → `OP OP` for a cheap result-invariant
   nullary opcode; length-preserving, so it runs on BOTH symbolic and concrete input — the one pass that
-  also lowers concrete `.hex`/`.bin` gas). `features::optimize` runs the enabled passes and merges their edit spans
+  also lowers concrete `.hex`/`.bin` gas), and `fold_shift` (always-safe precompute of a constant
+  `PUSH a PUSH b SHL/SHR` into one push — e.g. solc's `1 << 160` address mask; length-changing so
+  symbolic input only, and it GROWS bytecode to lower per-call gas: the one pass that trades size for
+  gas, solc-only as venom never emits the idiom). `features::optimize` runs the enabled passes and merges their edit spans
   via `merge_nonoverlapping` (a later pass yields to an earlier one on overlap). Add a pass: a module
   here, register its `META` in `features::registry()`, and run it from `features::optimize`.
 - `src/config.rs` — `FeatureConfig` with precedence defaults → config file → CLI; `enabled_categories()`

@@ -23,7 +23,11 @@ FEATURES (all enabled by default):
     shuffle    — reschedule DUP/SWAP/POP windows to a cheaper equivalent (always
                  safe; symbolic input only)
     involution — cancel runs of an involutive op (NOT NOT -> nothing; always safe;
-                 symbolic input only)";
+                 symbolic input only)
+    recompute  — recompute a cheap nullary opcode instead of DUP-ing it (OP DUP1 ->
+                 OP OP; always safe; any input)
+    foldshift  — precompute a constant PUSH a PUSH b SHL/SHR into one push (always
+                 safe; lowers gas, grows bytecode; symbolic input only)";
 
 /// Super-aggressive gas optimizer for EVM bytecode/assembly.
 #[derive(Parser, Debug)]

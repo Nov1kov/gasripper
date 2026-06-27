@@ -135,21 +135,28 @@ def _inverse_guards(code, revert_tags):
 
 
 def _descriptor(item, revert_tags):
-    """Map a solc asm-json code item to a shared `(kind, mnem)` descriptor."""
+    """Map a solc asm-json code item to a shared `(kind, mnem, value)` descriptor.
+
+    `value` is the concrete immediate (`0x..`) only for a plain literal `PUSH`; every
+    other push (jump target, data/size/lib/immutable) is symbolic and carries `None`,
+    so the fold pass never treats it as a constant.
+    """
     name = item["name"]
     if name == "PUSH [tag]":
         val = str(item.get("value"))
         if val in revert_tags:
-            return "pushsym", "_sym_revert_%s" % val      # normalized revert target
-        return "push", "PUSH"                              # ordinary jump target
+            return "pushsym", "_sym_revert_%s" % val, None  # normalized revert target
+        return "push", "PUSH", None                         # ordinary jump target
     if name == "tag":
-        return "label", "_sym_tag_%s" % item.get("value")
+        return "label", "_sym_tag_%s" % item.get("value"), None
     if name == "JUMPDEST":
-        return "label", "JUMPDEST"
+        return "label", "JUMPDEST", None
+    if name == "PUSH":
+        return "push", "PUSH", "0x" + str(item.get("value"))  # plain literal push
     if name.startswith("PUSH"):
-        # PUSH, PUSH data, PUSH #[$], PUSH [$], PUSHSIZE, PUSHLIB, PUSHIMMUTABLE, ...
-        return "push", "PUSH"
-    return "op", name                                       # a plain opcode mnemonic
+        # PUSH data, PUSH #[$], PUSH [$], PUSHSIZE, PUSHLIB, PUSHIMMUTABLE, ...
+        return "push", "PUSH", None
+    return "op", name, None                                  # a plain opcode mnemonic
 
 
 def cmd_dump(args):
@@ -160,10 +167,10 @@ def cmd_dump(args):
     out = ["REF 0x" + _bin_reference(args.source, args.evm_version)]
     for i, item in enumerate(code):
         if i in norm:
-            kind, mnem = "pushsym", "_sym_revert_inv_%s" % norm[i]
+            kind, mnem, value = "pushsym", "_sym_revert_inv_%s" % norm[i], None
         else:
-            kind, mnem = _descriptor(item, rev)
-        out.append("INSTR %s %s" % (kind, mnem))
+            kind, mnem, value = _descriptor(item, rev)
+        out.append("INSTR %s %s%s" % (kind, mnem, "" if value is None else " " + value))
     sys.stdout.write("\n".join(out) + "\n")
 
 
@@ -178,6 +185,15 @@ def _parse_edits(s):
     return edits
 
 
+def _edit_item(op):
+    """A replacement op token as an asm-json code item: `#<hex>` is a folded push
+    literal (the fold pass precomputed a constant shift); anything else is a bare
+    opcode."""
+    if op.startswith("#"):
+        return {"name": "PUSH", "value": op[1:]}
+    return {"name": op}
+
+
 def _apply_edits(code, edits, blocks):
     """Replace each `[start, end]` with its ops; also drop an inverse guard's inline
     revert block when that guard's JUMPI is removed."""
@@ -190,7 +206,7 @@ def _apply_edits(code, edits, blocks):
     while i < n:
         if i in repl:
             end, ops = repl[i]
-            out.extend({"name": op} for op in ops)
+            out.extend(_edit_item(op) for op in ops)
             i = end + 1
             continue
         if i in drop:

@@ -96,12 +96,19 @@ dropping call gas 22103 → 22102; Vyper 0.4.3 venom — a per-iteration `CHAINI
 over 5 iterations). Unlike the others it is length-preserving, so it also lowers gas on raw concrete
 `.hex`/`.bin` bytecode (`--emit-bytecode`), where no compiler relinks.
 
+The `foldshift` pass is proven on Solidity (`src/features/fold_shift/e2e.rs`): solc 0.8.24 materializes
+the address-cleaning mask `1 << 160` as `PUSH1 0x01 PUSH1 0xa0 SHL` to keep bytecode small; folding it
+to a single `PUSH21` literal drops a `transfer(address,uint256)` call (two masked address arguments)
+26518 → 26506 gas (−12) while **growing** the creation bytecode 473 → 532 (+59) — the one pass that
+trades size for gas. It is solc-specific: Vyper's venom does not emit the idiom.
+
 ## Adding a feature
 
-A feature is one independent gas-reduction pass. Four ship today: `guards` (trusted-caller revert
+A feature is one independent gas-reduction pass. Five ship today: `guards` (trusted-caller revert
 removal, `src/features/guards/`), `shuffle` (always-safe stack rescheduling, `src/features/shuffle/`),
-`involution` (always-safe `NOT NOT` cancelling, `src/features/involution/`), and `recompute`
-(always-safe `OP DUP1` → `OP OP` recompute, `src/features/recompute/`) — each a reference
+`involution` (always-safe `NOT NOT` cancelling, `src/features/involution/`), `recompute`
+(always-safe `OP DUP1` → `OP OP` recompute, `src/features/recompute/`), and `foldshift` (always-safe
+constant `PUSH a PUSH b SHL/SHR` folding, `src/features/fold_shift/`) — each a reference
 module of `mod.rs` + `README.md` + `e2e.rs`. `shuffle`, `involution`, and `recompute` show a pass need
 not be guard-removal: each owns its own `Category` and runs its own `scan` instead of `strip_guards`, and
 the orchestrator (`features::optimize`) runs every enabled pass and merges their edit spans (a later

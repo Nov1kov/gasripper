@@ -19,6 +19,7 @@ use crate::core::{Category, Instr, Span, apply_spans, strip_guards};
 
 #[cfg(test)]
 pub mod e2e_harness;
+pub mod fold_shift;
 pub mod guards;
 pub mod involution;
 pub mod recompute;
@@ -41,7 +42,7 @@ pub struct FeatureMeta {
 
 /// The full registry of available features.
 pub fn registry() -> Vec<FeatureMeta> {
-    vec![guards::META, shuffle::META, involution::META, recompute::META]
+    vec![guards::META, shuffle::META, involution::META, recompute::META, fold_shift::META]
 }
 
 /// Find a feature's metadata by key.
@@ -70,13 +71,13 @@ fn merge_nonoverlapping(spans: &mut Vec<Span>, candidates: Vec<Span>) {
 /// Run the enabled passes over `instrs`, returning the rewritten program and every
 /// applied edit span (on original indices).
 ///
-/// Guard removal runs first. The always-safe length-changing passes — stack-shuffle
-/// rescheduling and involution cancelling — run only on symbolic programs: they change
-/// instruction lengths and rely on the sidecar/compiler to relink jumps, which the
-/// concrete-bytecode path cannot do. Recompute is length-preserving (one single-byte
-/// opcode for another), so it runs on every program — including concrete bytecode. A
-/// later pass's span that overlaps one already accepted is dropped, so the merged edit
-/// set stays non-overlapping.
+/// Guard removal runs first. The length-changing passes — stack-shuffle rescheduling,
+/// involution cancelling, and shift-constant folding — run only on symbolic programs:
+/// they change instruction lengths and rely on the sidecar/compiler to relink jumps,
+/// which the concrete-bytecode path cannot do. Recompute is length-preserving (one
+/// single-byte opcode for another), so it runs on every program — including concrete
+/// bytecode. A later pass's span that overlaps one already accepted is dropped, so the
+/// merged edit set stays non-overlapping.
 pub fn optimize(instrs: &[Instr], enabled: &HashSet<Category>) -> (Vec<Instr>, Vec<Span>) {
     let (_, mut spans) = strip_guards(instrs, enabled);
     if is_symbolic(instrs) {
@@ -85,6 +86,9 @@ pub fn optimize(instrs: &[Instr], enabled: &HashSet<Category>) -> (Vec<Instr>, V
         }
         if enabled.contains(&Category::Involution) {
             merge_nonoverlapping(&mut spans, involution::scan(instrs));
+        }
+        if enabled.contains(&Category::FoldShift) {
+            merge_nonoverlapping(&mut spans, fold_shift::scan(instrs));
         }
     }
     if enabled.contains(&Category::Recompute) {

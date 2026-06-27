@@ -105,14 +105,23 @@ def _parse_edits(s):
     return edits
 
 
+def _edit_instr(op):
+    """A replacement op token as an instruction: `#<hex>` is a folded push literal (the
+    fold pass precomputed a constant shift); anything else is a bare opcode."""
+    if op.startswith("#"):
+        h = op[1:]
+        return ("push", ["PUSH%d" % (len(h) // 2), int(h, 16)])
+    return ("op", [op])
+
+
 def _assemble(data, edits):
     """Re-assemble creation bytecode after applying RUNTIME edits (replace [start,end]
-    with the given POP/SWAP ops; an empty op list is a plain deletion)."""
+    with the given ops; an empty op list is a plain deletion)."""
     asm, ri, instr = _runtime_instr(data)
     header = asm[ri][0]
     out = list(instr)
     for start, end, ops in sorted(edits, key=lambda e: e[0], reverse=True):
-        out[start:end + 1] = [("op", [op]) for op in ops]
+        out[start:end + 1] = [_edit_instr(op) for op in ops]
     asm[ri] = [header] + flatten(out)
     metadata = bytes.fromhex(data.integrity_sum)
     return bytes(compile_ir.assembly_to_evm(asm, compiler_metadata=metadata)[0])
@@ -124,8 +133,12 @@ def cmd_dump(args):
     _, _, instr = _runtime_instr(data)
     out = ["REF 0x" + bytes(data.bytecode).hex()]
     for kind, toks in instr:
-        # mnem must be a single whitespace-free token (it always is for EVM asm).
-        out.append("INSTR %s %s" % (kind, str(toks[0])))
+        # mnem must be a single whitespace-free token (it always is for EVM asm). A
+        # concrete literal push also carries its immediate so the fold pass can see it.
+        if kind == "push":
+            out.append("INSTR push %s 0x%x" % (str(toks[0]), toks[1]))
+        else:
+            out.append("INSTR %s %s" % (kind, str(toks[0])))
     sys.stdout.write("\n".join(out) + "\n")
 
 

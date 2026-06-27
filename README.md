@@ -6,7 +6,7 @@
 
 A Rust CLI tool that maximally optimizes an EVM contract for gas. The goal is to **not change
 execution logic** while shedding everything not needed for a bare run, using any provably-safe
-transformation that lowers gas. Four passes ship today:
+transformation that lowers gas. Five passes ship today:
 
 - **`guards`** — remove redundant revert guards (overflow/underflow, ABI/calldata bounds, range/cast
   asserts). Aggressive: safe **only** under a trusted caller (see the disclaimer).
@@ -18,6 +18,9 @@ transformation that lowers gas. Four passes ship today:
 - **`recompute`** — rewrite a `DUP1` of a cheap result-invariant nullary opcode into a second copy of
   that opcode (`OP DUP1` → `OP OP`, e.g. `CALLVALUE DUP1`/`PUSH0 DUP1`). **Always safe** and
   length-preserving — the one pass that also lowers gas on raw concrete bytecode.
+- **`foldshift`** — precompute a constant `PUSH a PUSH b SHL/SHR` (e.g. solc's `1 << 160` address
+  mask) into a single push. **Always safe** — a self-contained constant. Trades bytecode size for
+  per-call gas, the opposite of what the compiler optimizes for.
 
 Fewer checks, cheaper stack juggling, and no wasted self-cancelling ops → less gas at execution time
 and smaller bytecode. The design leaves room for further gas-reducing passes.
@@ -31,8 +34,9 @@ vs. `DUP`) are **already eliminated by these optimizers**: on the latest compile
 provably no further *straight-line* wins of that class — verified empirically, both compilers do
 common-subexpression elimination on straight-line storage reads and fold these peepholes, so the
 optimized assembly contains none of them. gasripper therefore targets only what the compiler cannot
-do (trusted-caller guard removal) or deliberately leaves on the table (non-minimal stack scheduling,
-self-cancelling ops).
+do (trusted-caller guard removal) or deliberately leaves on the table — non-minimal stack scheduling,
+self-cancelling ops, and constant `SHL`/`SHR` materialization the compiler keeps un-folded to save
+bytecode (`foldshift` re-folds it, spending bytecode to lower per-call gas).
 
 The latest compiler releases pinned and tested in CI/e2e — gasripper tracks the **latest** release of
 each language, driving the compiler's own assembler:
@@ -69,44 +73,28 @@ flowchart LR
     classDef opt fill:#ffe1e1,stroke:#d33,stroke-width:2px,color:#000;
 ```
 
-## Safety
-
-gasripper makes two kinds of change, each with its own safety argument detailed in its feature README:
-
-- **`guards`** — safe **only under a trusted caller** (see the disclaimer above): it removes checks
-  (overflow/underflow, bounds, range) that a trusted, well-formed caller never trips, reproducing the
-  fall-through stack exactly and never touching auth (`CALLER`/`ORIGIN`) or side effects. Mechanism,
-  the always-preserved sets, and post-strip dead-block cleanup:
-  [`src/features/guards/README.md`](src/features/guards/README.md).
-- **`shuffle`**, **`involution`**, and **`recompute`** — **always safe**: a pure stack reordering that
-  changes no value (`shuffle`, emitted only when provably equivalent and strictly cheaper), the
-  cancelling of an op applied to its own inverse (`involution`, `NOT NOT` → nothing), and recomputing
-  a cheap result-invariant nullary opcode rather than `DUP`-ing it (`recompute`, `OP DUP1` → `OP OP`).
-  Worked examples + soundness:
-  [`src/features/shuffle/README.md`](src/features/shuffle/README.md),
-  [`src/features/involution/README.md`](src/features/involution/README.md),
-  [`src/features/recompute/README.md`](src/features/recompute/README.md).
-
-`guards`, `shuffle`, and `involution` operate on symbolic assembly and are relinked by the compiler's
-own assembler — the binary never guesses a linker. `recompute` swaps one single-byte opcode for
-another (length-preserving), so it additionally runs on concrete `.hex`/`.bin` bytecode, where no
-relink is needed.
-
 ## Features
 
 A feature is one independent gas-reduction pass, lives in its own module, and is toggled
-independently (**all enabled by default**). List them with `gasripper --list-features`.
+independently (**all enabled by default**). List them with `gasripper --list-features`. Each feature's
+README has the full mechanism, soundness, and measured gas; the per-language safety argument lives
+there, not duplicated here.
 
-| Key | Does | Trusted caller? | Docs |
-|---|---|---|---|
-| `guards` | strips all provably-safe revert guards — overflow/underflow, division-by-zero, ABI/calldata bounds, range/cast asserts | **required** (aggressive) | [`src/features/guards/README.md`](src/features/guards/README.md) |
-| `shuffle` | reschedules non-minimal `DUP`/`SWAP`/`POP` windows to a cheaper equivalent | not needed (always safe) | [`src/features/shuffle/README.md`](src/features/shuffle/README.md) |
-| `involution` | cancels runs of an involutive op (`NOT NOT` → nothing, odd runs → one `NOT`) | not needed (always safe) | [`src/features/involution/README.md`](src/features/involution/README.md) |
-| `recompute` | rewrites a `DUP1` of a cheap result-invariant nullary opcode into that opcode (`OP DUP1` → `OP OP`) | not needed (always safe) | [`src/features/recompute/README.md`](src/features/recompute/README.md) |
+The matrix below shows where each pass finds something to optimize — ✓ = the compiler leaves
+imperfections this pass removes, — = the pass is correct but finds nothing (the compiler already does
+it). Both compilers' output is **already optimized** (Vyper venom `GAS`, solc `--optimize`), so a pass
+fires only where its compiler leaves that specific class on the table.
 
-`guards`, `shuffle`, `involution`, and `recompute` are independent passes — see each feature's README
-(linked above) for what it rewrites and why it is safe. Each README (module docs + unit tests + a
-real-EVM e2e) is the template a new pass follows; see [DEVELOPMENT.md](DEVELOPMENT.md).
+| Feature | Vyper | Solidity | Trusted caller? | Docs |
+|---|:---:|:---:|---|---|
+| `guards` — strip provably-safe revert guards (overflow/bounds/range) | ✓ | ✓ | **required** (aggressive) | [README](src/features/guards/README.md) |
+| `shuffle` — reschedule `DUP`/`SWAP`/`POP` windows to a cheaper equivalent | ✓ | — | not needed (always safe) | [README](src/features/shuffle/README.md) |
+| `involution` — cancel runs of an involutive op (`NOT NOT` → nothing) | ✓ | — | not needed (always safe) | [README](src/features/involution/README.md) |
+| `recompute` — recompute a cheap nullary opcode instead of `DUP`-ing it (`OP DUP1` → `OP OP`) | ✓ | ✓ | not needed (always safe) | [README](src/features/recompute/README.md) |
+| `foldshift` — precompute a constant `PUSH a PUSH b SHL/SHR` into one push | — | ✓ | not needed (always safe) | [README](src/features/fold_shift/README.md) |
+
+Each README (module docs + unit tests + a real-EVM e2e) is the template a new pass follows; see
+[DEVELOPMENT.md](DEVELOPMENT.md).
 
 ### Disabling features
 
