@@ -83,7 +83,10 @@ pub fn parse_tokens(toks: &[&str]) -> Vec<Instr> {
         }
         if t == "_OFST" {
             let end = (i + 3).min(n);
-            out.push(Instr::new(Kind::Ofst, toks[i..end].iter().map(|s| s.to_string()).collect()));
+            out.push(Instr::new(
+                Kind::Ofst,
+                toks[i..end].iter().map(|s| s.to_string()).collect(),
+            ));
             i = end;
             continue;
         }
@@ -156,15 +159,53 @@ pub fn push_literal_value(ins: &Instr) -> Option<&str> {
     None
 }
 
-/// Build the instruction for one [`crate::core::Span`] replacement token. A `#<hex>`
-/// token is a folded push literal (`#01..` -> `PUSH21 0x01..`); any other token is a
-/// bare opcode mnemonic. The push size is the minimal byte length of the literal.
+/// Build the instruction for one [`crate::core::Span`] replacement token (the inverse of
+/// [`replacement_token`]). A `#<hex>` token is a folded push literal (`#01..` -> `PUSH21
+/// 0x01..`, minimal byte length — emitted by the fold pass). A `<tag>~<rest>` token carries a
+/// copied body instruction the inline pass relocates verbatim: `P` push (`P~PUSH3~0x40`), `Y`
+/// pushsym, `M` pushmem, `L` label (`L~sym`, or `L~` for a bare `JUMPDEST`), `R` raw. Any other
+/// token is a bare opcode mnemonic.
 pub fn replacement_instr(op: &str) -> Instr {
     if let Some(hex) = op.strip_prefix('#') {
         let n = hex.len().div_ceil(2);
         return Instr::new(Kind::Push, vec![format!("PUSH{n}"), format!("0x{hex}")]);
     }
+    if let Some((tag, rest)) = op.split_once('~') {
+        return match tag {
+            "P" => match rest.split_once('~') {
+                Some((mnem, val)) => Instr::new(Kind::Push, vec![mnem.into(), val.into()]),
+                None => Instr::new(Kind::Push, vec![rest.into()]),
+            },
+            "Y" => Instr::new(Kind::PushSym, vec![rest.into()]),
+            "M" => Instr::new(Kind::PushMem, vec![rest.into()]),
+            "L" if rest.is_empty() => Instr::new(Kind::Label, vec!["JUMPDEST".into()]),
+            "L" => Instr::new(Kind::Label, vec![rest.into(), "JUMPDEST".into()]),
+            "R" => Instr::new(Kind::Raw, vec![rest.into()]),
+            _ => Instr::new(Kind::Op, vec![op.to_string()]),
+        };
+    }
     Instr::new(Kind::Op, vec![op.to_string()])
+}
+
+/// Encode `ins` as a [`Span`](crate::core::Span) replacement token (the inverse of
+/// [`replacement_instr`]). Used by the inline pass to carry a relocated body instruction —
+/// including its symbolic labels and exact push width — across the sidecar edit protocol.
+/// `Ofst` is not representable (its symbol is lost in the dump); the inline pass never emits
+/// one, so it is encoded as a bare opcode placeholder.
+pub fn replacement_token(ins: &Instr) -> String {
+    match ins.kind {
+        Kind::Op => ins.mnem().to_string(),
+        Kind::Push => match ins.tokens.get(1) {
+            Some(v) => format!("P~{}~{}", ins.mnem(), v),
+            None => format!("P~{}", ins.mnem()),
+        },
+        Kind::PushSym => format!("Y~{}", ins.mnem()),
+        Kind::PushMem => format!("M~{}", ins.mnem()),
+        Kind::Label if ins.tokens.len() > 1 => format!("L~{}", ins.tokens[0]),
+        Kind::Label => "L~".to_string(),
+        Kind::Raw => format!("R~{}", ins.mnem()),
+        Kind::Ofst => ins.mnem().to_string(),
+    }
 }
 
 /// Whether the program contains symbolic elements that require linking
@@ -212,5 +253,36 @@ mod tests {
         let src = "DUP1 PUSH1 32 LT _sym___revert JUMPI";
         let p = parse_str(src);
         assert_eq!(flatten(&p).join(" "), src);
+    }
+
+    #[test]
+    fn replacement_token_roundtrips_every_kind() {
+        // The inline pass encodes a relocated body instruction-by-instruction and the sidecar
+        // (and Rust mirror) decode it: each kind must survive the encode/decode round trip.
+        let cases = vec![
+            Instr::new(Kind::Op, vec!["SWAP2".into()]),
+            Instr::new(Kind::Push, vec!["PUSH3".into(), "0x40".into()]),
+            Instr::new(Kind::PushSym, vec!["_sym_12_else".into()]),
+            Instr::new(Kind::PushMem, vec!["_mem_x".into()]),
+            Instr::new(
+                Kind::Label,
+                vec!["_sym_13_if_exit".into(), "JUMPDEST".into()],
+            ),
+            Instr::new(Kind::Label, vec!["JUMPDEST".into()]),
+            Instr::new(Kind::Raw, vec!["0".into()]),
+        ];
+        for ins in cases {
+            let back = replacement_instr(&replacement_token(&ins));
+            assert_eq!(
+                back.kind, ins.kind,
+                "kind was lost round-tripping {:?}",
+                ins.tokens
+            );
+            assert_eq!(
+                back.tokens, ins.tokens,
+                "tokens were lost round-tripping {:?}",
+                ins.tokens
+            );
+        }
     }
 }

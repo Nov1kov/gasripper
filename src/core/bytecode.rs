@@ -12,7 +12,10 @@ use super::opcodes::{name_for_byte, op_byte, push_immediate_len};
 /// Parse a hex string (with or without `0x`) into bytes.
 pub fn hex_to_bytes(s: &str) -> Result<Vec<u8>, String> {
     let s = s.trim();
-    let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+    let s = s
+        .strip_prefix("0x")
+        .or_else(|| s.strip_prefix("0X"))
+        .unwrap_or(s);
     let s: String = s.chars().filter(|c| !c.is_whitespace()).collect();
     if s.len() % 2 != 0 {
         return Err("odd number of hex characters".into());
@@ -79,14 +82,13 @@ pub fn assemble(instrs: &[Instr]) -> Result<Vec<u8>, String> {
     for ins in instrs {
         match ins.kind {
             Kind::Op => {
-                let b = op_byte(ins.mnem())
-                    .ok_or_else(|| format!("unknown opcode: {}", ins.mnem()))?;
+                let b =
+                    op_byte(ins.mnem()).ok_or_else(|| format!("unknown opcode: {}", ins.mnem()))?;
                 out.push(b);
             }
             Kind::Push => {
                 let name = ins.mnem();
-                let n = push_immediate_len(name)
-                    .ok_or_else(|| format!("not PUSH1..32: {name}"))?;
+                let n = push_immediate_len(name).ok_or_else(|| format!("not PUSH1..32: {name}"))?;
                 let b = op_byte(name).ok_or_else(|| format!("unknown PUSH: {name}"))?;
                 let val = ins.tokens.get(1).ok_or("PUSH without an immediate")?;
                 let bytes = push_value_bytes(val, n)?;
@@ -134,7 +136,11 @@ fn push_value_bytes(val: &str, n: usize) -> Result<Vec<u8>, String> {
 /// Parse a value token (`0x..` or decimal) into minimal big-endian bytes.
 fn hex_or_dec_bytes(val: &str) -> Result<Vec<u8>, String> {
     if let Some(h) = val.strip_prefix("0x").or_else(|| val.strip_prefix("0X")) {
-        let h = if h.len() % 2 != 0 { format!("0{h}") } else { h.to_string() };
+        let h = if h.len() % 2 != 0 {
+            format!("0{h}")
+        } else {
+            h.to_string()
+        };
         return hex_to_bytes(&h);
     }
     // Decimal — via u128 (enough for hand-written assembly).
@@ -157,10 +163,7 @@ mod tests {
         // PUSH1 0x01 PUSH1 0x02 ADD STOP
         let code = vec![0x60, 0x01, 0x60, 0x02, 0x01, 0x00];
         let instrs = disassemble(&code);
-        assert_eq!(
-            flatten(&instrs).join(" "),
-            "PUSH1 0x01 PUSH1 0x02 ADD STOP"
-        );
+        assert_eq!(flatten(&instrs).join(" "), "PUSH1 0x01 PUSH1 0x02 ADD STOP");
     }
 
     #[test]

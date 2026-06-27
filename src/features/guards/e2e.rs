@@ -13,14 +13,17 @@ use std::collections::HashSet;
 use crate::core::asm::Kind;
 use crate::core::{Category, strip_guards};
 use crate::features::e2e_harness::{
-    assert_preserved_and_smaller, assert_rejects_stranger, assert_win, encode_call, measure, write_temp,
+    assert_preserved_and_smaller, assert_rejects_stranger, assert_win, encode_call, measure,
+    write_temp,
 };
 use crate::sidecar::{Backend, Lang};
 
 /// A Vyper `foo` returning `ret_expr`, optionally wrapped in a trusted-caller assert.
 fn vyper(auth: bool, sig: &str, ret: &str, ret_expr: &str) -> String {
     if auth {
-        format!("owner: public(address)\n\n@deploy\ndef __init__():\n    self.owner = msg.sender\n\n@external\ndef foo({sig}) -> {ret}:\n    assert msg.sender == self.owner\n    return {ret_expr}\n")
+        format!(
+            "owner: public(address)\n\n@deploy\ndef __init__():\n    self.owner = msg.sender\n\n@external\ndef foo({sig}) -> {ret}:\n    assert msg.sender == self.owner\n    return {ret_expr}\n"
+        )
     } else {
         format!("@external\ndef foo({sig}) -> {ret}:\n    return {ret_expr}\n")
     }
@@ -30,15 +33,29 @@ fn vyper(auth: bool, sig: &str, ret: &str, ret_expr: &str) -> String {
 /// == owner)`. Auth reads storage (`view`); without it the function is `pure`.
 fn solidity(auth: bool, args: &str, body: &str) -> String {
     if auth {
-        format!("pragma solidity ^0.8.20;\ncontract C {{\n    address public owner;\n    constructor() {{ owner = msg.sender; }}\n    function foo({args}) external view returns (uint256) {{\n        require(msg.sender == owner);\n        {body}\n    }}\n}}\n")
+        format!(
+            "pragma solidity ^0.8.20;\ncontract C {{\n    address public owner;\n    constructor() {{ owner = msg.sender; }}\n    function foo({args}) external view returns (uint256) {{\n        require(msg.sender == owner);\n        {body}\n    }}\n}}\n"
+        )
     } else {
-        format!("pragma solidity ^0.8.20;\ncontract C {{\n    function foo({args}) external pure returns (uint256) {{\n        {body}\n    }}\n}}\n")
+        format!(
+            "pragma solidity ^0.8.20;\ncontract C {{\n    function foo({args}) external pure returns (uint256) {{\n        {body}\n    }}\n}}\n"
+        )
     }
 }
 
 /// Strip the guards, prove `foo(args) == expected` with a gas win, and confirm the
 /// auth guard still rejects a stranger. Skips on a missing toolchain.
-fn win(lang: &str, backend: Backend, filename: &str, source: &str, sig: &str, args: &[u64], expected: u64, gas_base: u64, gas_opt: u64) {
+fn win(
+    lang: &str,
+    backend: Backend,
+    filename: &str,
+    source: &str,
+    sig: &str,
+    args: &[u64],
+    expected: u64,
+    gas_base: u64,
+    gas_opt: u64,
+) {
     let path = write_temp(filename, source);
     let r = match measure(&backend, &path, Category::Guard, encode_call(sig, args)) {
         Ok(r) => r,
@@ -53,7 +70,17 @@ fn win(lang: &str, backend: Backend, filename: &str, source: &str, sig: &str, ar
 
 /// Strip the guards on a contract with NO auth wrapper: result preserved, bytecode
 /// shrinks (call gas drops only when the guard is on this dispatcher's hot path).
-fn no_auth(lang: &str, backend: Backend, filename: &str, source: &str, sig: &str, args: &[u64], expected: u64, gas_base: u64, gas_opt: u64) {
+fn no_auth(
+    lang: &str,
+    backend: Backend,
+    filename: &str,
+    source: &str,
+    sig: &str,
+    args: &[u64],
+    expected: u64,
+    gas_base: u64,
+    gas_opt: u64,
+) {
     let path = write_temp(filename, source);
     let r = match measure(&backend, &path, Category::Guard, encode_call(sig, args)) {
         Ok(r) => r,
@@ -65,8 +92,12 @@ fn no_auth(lang: &str, backend: Backend, filename: &str, source: &str, sig: &str
     assert_preserved_and_smaller(&r, lang, expected, gas_base, gas_opt);
 }
 
-fn vy() -> Backend { Backend::new(Lang::Vyper) }
-fn so() -> Backend { Backend::new(Lang::Solidity) }
+fn vy() -> Backend {
+    Backend::new(Lang::Vyper)
+}
+fn so() -> Backend {
+    Backend::new(Lang::Solidity)
+}
 
 const ARG2: &str = "a: uint256, b: uint256";
 const SARG2: &str = "uint256 a, uint256 b";
@@ -99,13 +130,27 @@ fn vyper_dce_cuts_the_real_revert_handler() {
     // outright (a guard span instead ends at its JUMPI and is never a Label start).
     let handler = spans
         .iter()
-        .find(|s| dump.instrs[s.start].kind == Kind::Label && dump.instrs[s.start].mnem().contains("revert"))
+        .find(|s| {
+            dump.instrs[s.start].kind == Kind::Label
+                && dump.instrs[s.start].mnem().contains("revert")
+        })
         .expect("DCE did not select the orphaned revert handler block for deletion");
-    let block: Vec<&str> = dump.instrs[handler.start..=handler.end].iter().map(|i| i.mnem()).collect();
-    assert_eq!(block.last(), Some(&"REVERT"), "the deleted block is not a revert handler: {block:?}");
-    assert!(handler.replacement.is_empty(), "the dead revert handler must be deleted, not replaced");
+    let block: Vec<&str> = dump.instrs[handler.start..=handler.end]
+        .iter()
+        .map(|i| i.mnem())
+        .collect();
+    assert_eq!(
+        block.last(),
+        Some(&"REVERT"),
+        "the deleted block is not a revert handler: {block:?}"
+    );
     assert!(
-        !opt.iter().any(|i| i.kind == Kind::Label && i.mnem().contains("revert")),
+        handler.replacement.is_empty(),
+        "the dead revert handler must be deleted, not replaced"
+    );
+    assert!(
+        !opt.iter()
+            .any(|i| i.kind == Kind::Label && i.mnem().contains("revert")),
         "a revert handler label survived DCE in the optimized stream"
     );
 }
@@ -114,96 +159,276 @@ fn vyper_dce_cuts_the_real_revert_handler() {
 
 #[test]
 fn vyper_add_strips() {
-    win("vyper", vy(), "g_vy_add.vy", &vyper(true, ARG2, "uint256", "a + b"), SIG2, &[3, 4], 7, 23631, 23593);
+    win(
+        "vyper",
+        vy(),
+        "g_vy_add.vy",
+        &vyper(true, ARG2, "uint256", "a + b"),
+        SIG2,
+        &[3, 4],
+        7,
+        23631,
+        23593,
+    );
 }
 
 #[test]
 fn vyper_sub_strips() {
-    win("vyper", vy(), "g_vy_sub.vy", &vyper(true, ARG2, "uint256", "a - b"), SIG2, &[7, 4], 3, 23634, 23596);
+    win(
+        "vyper",
+        vy(),
+        "g_vy_sub.vy",
+        &vyper(true, ARG2, "uint256", "a - b"),
+        SIG2,
+        &[7, 4],
+        3,
+        23634,
+        23596,
+    );
 }
 
 #[test]
 fn vyper_mul_strips() {
-    win("vyper", vy(), "g_vy_mul.vy", &vyper(true, ARG2, "uint256", "a * b"), SIG2, &[3, 4], 12, 23671, 23633);
+    win(
+        "vyper",
+        vy(),
+        "g_vy_mul.vy",
+        &vyper(true, ARG2, "uint256", "a * b"),
+        SIG2,
+        &[3, 4],
+        12,
+        23671,
+        23633,
+    );
 }
 
 #[test]
 fn vyper_div_strips() {
-    win("vyper", vy(), "g_vy_div.vy", &vyper(true, ARG2, "uint256", "a // b"), SIG2, &[12, 4], 3, 23627, 23570);
+    win(
+        "vyper",
+        vy(),
+        "g_vy_div.vy",
+        &vyper(true, ARG2, "uint256", "a // b"),
+        SIG2,
+        &[12, 4],
+        3,
+        23627,
+        23570,
+    );
 }
 
 #[test]
 fn vyper_convert_strips() {
-    win("vyper", vy(), "g_vy_cvt.vy", &vyper(true, "a: uint256", "uint128", "convert(a, uint128)"), SIG1, &[3], 3, 23479, 23419);
+    win(
+        "vyper",
+        vy(),
+        "g_vy_cvt.vy",
+        &vyper(true, "a: uint256", "uint128", "convert(a, uint128)"),
+        SIG1,
+        &[3],
+        3,
+        23479,
+        23419,
+    );
 }
 
 // --- Vyper, no auth wrapper ---
 
 #[test]
 fn vyper_add_no_auth() {
-    no_auth("vyper", vy(), "g_vy_add_na.vy", &vyper(false, ARG2, "uint256", "a + b"), SIG2, &[3, 4], 7, 21860, 21860);
+    no_auth(
+        "vyper",
+        vy(),
+        "g_vy_add_na.vy",
+        &vyper(false, ARG2, "uint256", "a + b"),
+        SIG2,
+        &[3, 4],
+        7,
+        21860,
+        21860,
+    );
 }
 
 #[test]
 fn vyper_sub_no_auth() {
-    no_auth("vyper", vy(), "g_vy_sub_na.vy", &vyper(false, ARG2, "uint256", "a - b"), SIG2, &[7, 4], 3, 21860, 21860);
+    no_auth(
+        "vyper",
+        vy(),
+        "g_vy_sub_na.vy",
+        &vyper(false, ARG2, "uint256", "a - b"),
+        SIG2,
+        &[7, 4],
+        3,
+        21860,
+        21860,
+    );
 }
 
 #[test]
 fn vyper_mul_no_auth() {
-    no_auth("vyper", vy(), "g_vy_mul_na.vy", &vyper(false, ARG2, "uint256", "a * b"), SIG2, &[3, 4], 12, 21860, 21860);
+    no_auth(
+        "vyper",
+        vy(),
+        "g_vy_mul_na.vy",
+        &vyper(false, ARG2, "uint256", "a * b"),
+        SIG2,
+        &[3, 4],
+        12,
+        21860,
+        21860,
+    );
 }
 
 #[test]
 fn vyper_convert_no_auth() {
-    no_auth("vyper", vy(), "g_vy_cvt_na.vy", &vyper(false, "a: uint256", "uint128", "convert(a, uint128)"), SIG1, &[3], 3, 21510, 21510);
+    no_auth(
+        "vyper",
+        vy(),
+        "g_vy_cvt_na.vy",
+        &vyper(false, "a: uint256", "uint128", "convert(a, uint128)"),
+        SIG1,
+        &[3],
+        3,
+        21510,
+        21510,
+    );
 }
 
 // --- Solidity, trusted-caller (auth) ---
 
 #[test]
 fn solidity_add_strips() {
-    win("solidity", so(), "g_so_add.sol", &solidity(true, SARG2, "return a + b;"), SIG2, &[3, 4], 7, 23843, 23793);
+    win(
+        "solidity",
+        so(),
+        "g_so_add.sol",
+        &solidity(true, SARG2, "return a + b;"),
+        SIG2,
+        &[3, 4],
+        7,
+        23843,
+        23793,
+    );
 }
 
 #[test]
 fn solidity_sub_strips() {
-    win("solidity", so(), "g_so_sub.sol", &solidity(true, SARG2, "return a - b;"), SIG2, &[7, 4], 3, 23843, 23793);
+    win(
+        "solidity",
+        so(),
+        "g_so_sub.sol",
+        &solidity(true, SARG2, "return a - b;"),
+        SIG2,
+        &[7, 4],
+        3,
+        23843,
+        23793,
+    );
 }
 
 #[test]
 fn solidity_mul_strips() {
-    win("solidity", so(), "g_so_mul.sol", &solidity(true, SARG2, "return a * b;"), SIG2, &[3, 4], 12, 23859, 23809);
+    win(
+        "solidity",
+        so(),
+        "g_so_mul.sol",
+        &solidity(true, SARG2, "return a * b;"),
+        SIG2,
+        &[3, 4],
+        12,
+        23859,
+        23809,
+    );
 }
 
 #[test]
 fn solidity_div_strips() {
-    win("solidity", so(), "g_so_div.sol", &solidity(true, SARG2, "return a / b;"), SIG2, &[12, 4], 3, 23823, 23757);
+    win(
+        "solidity",
+        so(),
+        "g_so_div.sol",
+        &solidity(true, SARG2, "return a / b;"),
+        SIG2,
+        &[12, 4],
+        3,
+        23823,
+        23757,
+    );
 }
 
 #[test]
 fn solidity_range_strips() {
-    win("solidity", so(), "g_so_rng.sol", &solidity(true, "uint256 a", "require(a < 256); return a;"), SIG1, &[3], 3, 23617, 23545);
+    win(
+        "solidity",
+        so(),
+        "g_so_rng.sol",
+        &solidity(true, "uint256 a", "require(a < 256); return a;"),
+        SIG1,
+        &[3],
+        3,
+        23617,
+        23545,
+    );
 }
 
 // --- Solidity, no auth wrapper ---
 
 #[test]
 fn solidity_add_no_auth() {
-    no_auth("solidity", so(), "g_so_add_na.sol", &solidity(false, SARG2, "return a + b;"), SIG2, &[3, 4], 7, 21860, 21860);
+    no_auth(
+        "solidity",
+        so(),
+        "g_so_add_na.sol",
+        &solidity(false, SARG2, "return a + b;"),
+        SIG2,
+        &[3, 4],
+        7,
+        21860,
+        21860,
+    );
 }
 
 #[test]
 fn solidity_sub_no_auth() {
-    no_auth("solidity", so(), "g_so_sub_na.sol", &solidity(false, SARG2, "return a - b;"), SIG2, &[7, 4], 3, 21860, 21860);
+    no_auth(
+        "solidity",
+        so(),
+        "g_so_sub_na.sol",
+        &solidity(false, SARG2, "return a - b;"),
+        SIG2,
+        &[7, 4],
+        3,
+        21860,
+        21860,
+    );
 }
 
 #[test]
 fn solidity_mul_no_auth() {
-    no_auth("solidity", so(), "g_so_mul_na.sol", &solidity(false, SARG2, "return a * b;"), SIG2, &[3, 4], 12, 21860, 21860);
+    no_auth(
+        "solidity",
+        so(),
+        "g_so_mul_na.sol",
+        &solidity(false, SARG2, "return a * b;"),
+        SIG2,
+        &[3, 4],
+        12,
+        21860,
+        21860,
+    );
 }
 
 #[test]
 fn solidity_range_no_auth() {
-    no_auth("solidity", so(), "g_so_rng_na.sol", &solidity(false, "uint256 a", "require(a < 256); return a;"), SIG1, &[3], 3, 21510, 21510);
+    no_auth(
+        "solidity",
+        so(),
+        "g_so_rng_na.sol",
+        &solidity(false, "uint256 a", "require(a < 256); return a;"),
+        SIG1,
+        &[3],
+        3,
+        21510,
+        21510,
+    );
 }

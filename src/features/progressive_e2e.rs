@@ -38,26 +38,34 @@ fn assert_descending(
         let set: HashSet<Category> = stage.categories.iter().copied().collect();
         let r = measure_set(backend, path, &set, calldata.to_vec())?;
         assert_eq!(
-            U256::from_be_slice(&r.out_opt), U256::from(expected),
-            "{}: optimization changed the call result", stage.label
+            U256::from_be_slice(&r.out_opt),
+            U256::from(expected),
+            "{}: optimization changed the call result",
+            stage.label
         );
         if let Some(p) = prev {
             assert!(
                 r.gas_opt <= p,
-                "enabling {} must not raise call gas: {p} -> {}", stage.label, r.gas_opt
+                "enabling {} must not raise call gas: {p} -> {}",
+                stage.label,
+                r.gas_opt
             );
         } else {
             first = r.gas_opt;
         }
         assert_eq!(
             r.gas_opt, stage.gas,
-            "{}: call gas drifted from pinned {} to {}", stage.label, stage.gas, r.gas_opt
+            "{}: call gas drifted from pinned {} to {}",
+            stage.label, stage.gas, r.gas_opt
         );
         tracing::info!("progressive [{}]: call gas {}", stage.label, r.gas_opt);
         prev = Some(r.gas_opt);
     }
     let last = prev.expect("at least one stage");
-    assert!(last < first, "the full pass set must be strictly cheaper than the first stage: {first} -> {last}");
+    assert!(
+        last < first,
+        "the full pass set must be strictly cheaper than the first stage: {first} -> {last}"
+    );
     Ok(())
 }
 
@@ -87,13 +95,40 @@ fn vyper_gas_falls_as_passes_enable() {
     // 22296 (-30) -> +recompute 22291 (-5). cmpnorm finds nothing here (the comparison's SWAP1
     // is absorbed by a shuffle window — see vyper_cmpnorm_adds_a_step for where it does fire).
     let stages = [
-        Stage { label: "guards", categories: &[Category::Guard], gas: 22374 },
-        Stage { label: "+shuffle", categories: &[Category::Guard, Category::Shuffle], gas: 22326 },
-        Stage { label: "+involution", categories: &[Category::Guard, Category::Shuffle, Category::Involution], gas: 22296 },
-        Stage { label: "+recompute", categories: &[Category::Guard, Category::Shuffle, Category::Involution, Category::Recompute], gas: 22291 },
+        Stage {
+            label: "guards",
+            categories: &[Category::Guard],
+            gas: 22374,
+        },
+        Stage {
+            label: "+shuffle",
+            categories: &[Category::Guard, Category::Shuffle],
+            gas: 22326,
+        },
+        Stage {
+            label: "+involution",
+            categories: &[Category::Guard, Category::Shuffle, Category::Involution],
+            gas: 22296,
+        },
+        Stage {
+            label: "+recompute",
+            categories: &[
+                Category::Guard,
+                Category::Shuffle,
+                Category::Involution,
+                Category::Recompute,
+            ],
+            gas: 22291,
+        },
     ];
     let expected = 55;
-    if let Err(e) = assert_descending(&Backend::new(Lang::Vyper), &path, &calldata, expected, &stages) {
+    if let Err(e) = assert_descending(
+        &Backend::new(Lang::Vyper),
+        &path,
+        &calldata,
+        expected,
+        &stages,
+    ) {
         tracing::warn!("SKIP vyper progressive e2e (toolchain unavailable): {e}");
     }
 }
@@ -119,11 +154,25 @@ fn vyper_cmpnorm_adds_a_step() {
     // f(2,3,5) = 4 (2*i < 3*i for i in 1..=4). guards strips the per-iteration overflow checks;
     // cmpnorm then folds the loop's `SWAP1 LT` to `GT`, -3 gas/iteration over 5 iterations.
     let stages = [
-        Stage { label: "guards", categories: &[Category::Guard], gas: 22355 },
-        Stage { label: "+cmpnorm", categories: &[Category::Guard, Category::CmpNorm], gas: 22340 },
+        Stage {
+            label: "guards",
+            categories: &[Category::Guard],
+            gas: 22355,
+        },
+        Stage {
+            label: "+cmpnorm",
+            categories: &[Category::Guard, Category::CmpNorm],
+            gas: 22340,
+        },
     ];
     let expected = 4;
-    if let Err(e) = assert_descending(&Backend::new(Lang::Vyper), &path, &calldata, expected, &stages) {
+    if let Err(e) = assert_descending(
+        &Backend::new(Lang::Vyper),
+        &path,
+        &calldata,
+        expected,
+        &stages,
+    ) {
         tracing::warn!("SKIP vyper cmpnorm progressive e2e (toolchain unavailable): {e}");
     }
 }
@@ -157,12 +206,30 @@ fn solidity_gas_falls_as_passes_enable() {
     // CALLVALUE DUP1 (-1); enabling guards strips the per-iteration overflow checks and the whole
     // non-payable guard (subsuming recompute's target); foldshift then folds the address mask.
     let stages = [
-        Stage { label: "recompute", categories: &[Category::Recompute], gas: 44801 },
-        Stage { label: "+guards", categories: &[Category::Recompute, Category::Guard], gas: 44562 },
-        Stage { label: "+foldshift", categories: &[Category::Recompute, Category::Guard, Category::FoldShift], gas: 44550 },
+        Stage {
+            label: "recompute",
+            categories: &[Category::Recompute],
+            gas: 44801,
+        },
+        Stage {
+            label: "+guards",
+            categories: &[Category::Recompute, Category::Guard],
+            gas: 44562,
+        },
+        Stage {
+            label: "+foldshift",
+            categories: &[Category::Recompute, Category::Guard, Category::FoldShift],
+            gas: 44550,
+        },
     ];
     let expected = 10;
-    if let Err(e) = assert_descending(&Backend::new(Lang::Solidity), &path, &calldata, expected, &stages) {
+    if let Err(e) = assert_descending(
+        &Backend::new(Lang::Solidity),
+        &path,
+        &calldata,
+        expected,
+        &stages,
+    ) {
         tracing::warn!("SKIP solidity progressive e2e (toolchain unavailable): {e}");
     }
 }

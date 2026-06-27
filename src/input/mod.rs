@@ -68,7 +68,9 @@ pub fn load(path: &str, kind: InputKind, evm_version: Option<&str>) -> Result<Lo
     let resolved = match kind {
         InputKind::Auto => {
             if path == "-" {
-                return Err("for stdin specify the type explicitly: --input-kind <asm|bytecode>".into());
+                return Err(
+                    "for stdin specify the type explicitly: --input-kind <asm|bytecode>".into(),
+                );
             }
             detect_by_extension(path)
         }
@@ -92,7 +94,11 @@ pub fn load(path: &str, kind: InputKind, evm_version: Option<&str>) -> Result<Lo
             if instrs.is_empty() {
                 return Err("empty bytecode".into());
             }
-            Ok(Loaded { instrs, symbolic: false, kind: "bytecode" })
+            Ok(Loaded {
+                instrs,
+                symbolic: false,
+                kind: "bytecode",
+            })
         }
         InputKind::Vyper | InputKind::Solidity | InputKind::Auto => unreachable!(),
     }

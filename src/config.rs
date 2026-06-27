@@ -15,27 +15,37 @@
 //! guards = true
 //! ```
 //! Section headers (`[...]`) and comments (`#`) are ignored; lines of the form
-//! `key = true|false` are meaningful.
+//! `key = true|false` toggle a feature, and `inline_max_body = <int>` sets the inline pass's
+//! body-size threshold (the one numeric parameter).
 
 use std::collections::{HashMap, HashSet};
 
 use crate::core::Category;
 use crate::features;
 
-/// Per-key feature enablement.
+/// Config-file/CLI key for the inline body-size threshold (a numeric parameter, not a feature
+/// toggle).
+const INLINE_MAX_BODY_KEY: &str = "inline_max_body";
+
+/// Per-key feature enablement plus numeric pass parameters.
 #[derive(Clone, Debug)]
 pub struct FeatureConfig {
     enabled: HashMap<String, bool>,
+    inline_max_body: usize,
 }
 
 impl FeatureConfig {
-    /// Defaults from the feature registry (currently — all enabled).
+    /// Defaults from the feature registry (currently — all enabled) and the default inline
+    /// threshold.
     pub fn defaults() -> Self {
         let mut enabled = HashMap::new();
         for f in features::registry() {
             enabled.insert(f.key.to_string(), f.default_enabled);
         }
-        FeatureConfig { enabled }
+        FeatureConfig {
+            enabled,
+            inline_max_body: features::inline::DEFAULT_MAX_BODY,
+        }
     }
 
     /// Apply a config file on top of the current values.
@@ -47,9 +57,15 @@ impl FeatureConfig {
             }
             let (key, val) = line
                 .split_once('=')
-                .ok_or_else(|| format!("line {}: expected 'key = true|false'", lineno + 1))?;
+                .ok_or_else(|| format!("line {}: expected 'key = value'", lineno + 1))?;
             let key = key.trim();
             let val = val.trim();
+            if key == INLINE_MAX_BODY_KEY {
+                self.inline_max_body = val.parse().map_err(|_| {
+                    format!("line {}: expected an integer, got '{val}'", lineno + 1)
+                })?;
+                continue;
+            }
             if features::find(key).is_none() {
                 return Err(format!("line {}: unknown feature '{key}'", lineno + 1));
             }
@@ -61,6 +77,18 @@ impl FeatureConfig {
             self.enabled.insert(key.to_string(), on);
         }
         Ok(())
+    }
+
+    /// Set the inline pass body-size threshold (instructions).
+    #[inline]
+    pub fn set_inline_max_body(&mut self, n: usize) {
+        self.inline_max_body = n;
+    }
+
+    /// The inline pass body-size threshold (instructions).
+    #[inline]
+    pub fn inline_max_body(&self) -> usize {
+        self.inline_max_body
     }
 
     /// Disable a feature by key. Errors for an unknown key.
@@ -103,16 +131,64 @@ mod tests {
     #[test]
     fn defaults_all_on() {
         let c = FeatureConfig::defaults();
-        assert!(c.is_enabled("guards"), "the guards feature must default to enabled");
-        assert!(c.is_enabled("shuffle"), "the shuffle feature must default to enabled");
-        assert!(c.is_enabled("involution"), "the involution feature must default to enabled");
-        assert!(c.is_enabled("recompute"), "the recompute feature must default to enabled");
-        assert!(c.is_enabled("foldshift"), "the foldshift feature must default to enabled");
-        assert!(c.is_enabled("cmpnorm"), "the cmpnorm feature must default to enabled");
+        assert!(
+            c.is_enabled("inline"),
+            "the inline feature must default to enabled"
+        );
+        assert!(
+            c.is_enabled("guards"),
+            "the guards feature must default to enabled"
+        );
+        assert!(
+            c.is_enabled("shuffle"),
+            "the shuffle feature must default to enabled"
+        );
+        assert!(
+            c.is_enabled("involution"),
+            "the involution feature must default to enabled"
+        );
+        assert!(
+            c.is_enabled("recompute"),
+            "the recompute feature must default to enabled"
+        );
+        assert!(
+            c.is_enabled("foldshift"),
+            "the foldshift feature must default to enabled"
+        );
+        assert!(
+            c.is_enabled("cmpnorm"),
+            "the cmpnorm feature must default to enabled"
+        );
         assert_eq!(
             c.enabled_categories().len(),
-            6,
+            7,
             "every shipped category must be enabled by default"
+        );
+        assert_eq!(
+            c.inline_max_body(),
+            features::inline::DEFAULT_MAX_BODY,
+            "the inline threshold must default to the feature's default"
+        );
+    }
+
+    #[test]
+    fn config_file_sets_inline_threshold() {
+        // The numeric inline parameter is read from the config file like a feature toggle.
+        let mut c = FeatureConfig::defaults();
+        c.apply_file("[features]\ninline_max_body = 35\n").unwrap();
+        assert_eq!(
+            c.inline_max_body(),
+            35,
+            "the config file must set the inline body threshold"
+        );
+    }
+
+    #[test]
+    fn non_integer_inline_threshold_errors() {
+        let mut c = FeatureConfig::defaults();
+        assert!(
+            c.apply_file("inline_max_body = big\n").is_err(),
+            "a non-integer inline threshold must be rejected"
         );
     }
 
@@ -120,7 +196,10 @@ mod tests {
     fn file_overrides_defaults() {
         let mut c = FeatureConfig::defaults();
         c.apply_file("[features]\nguards = false\n").unwrap();
-        assert!(!c.is_enabled("guards"), "a config file must be able to disable the feature");
+        assert!(
+            !c.is_enabled("guards"),
+            "a config file must be able to disable the feature"
+        );
     }
 
     #[test]
@@ -128,7 +207,10 @@ mod tests {
         let mut c = FeatureConfig::defaults();
         c.apply_file("guards = false\n").unwrap();
         c.enable("guards").unwrap();
-        assert!(c.is_enabled("guards"), "a CLI enable must override the config file");
+        assert!(
+            c.is_enabled("guards"),
+            "a CLI enable must override the config file"
+        );
     }
 
     #[test]

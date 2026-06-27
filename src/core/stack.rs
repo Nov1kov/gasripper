@@ -392,11 +392,17 @@ fn cheapest_equivalent(base: &[i64], target: &[i64], budget: u64) -> (Option<Vec
 }
 
 /// Walk the `from` map back from `target` to `base`, collecting the ops in order.
-fn rebuild_path(from: &std::collections::HashMap<Vec<i64>, (Vec<i64>, Shuffle)>, base: &[i64], target: &[i64]) -> Vec<String> {
+fn rebuild_path(
+    from: &std::collections::HashMap<Vec<i64>, (Vec<i64>, Shuffle)>,
+    base: &[i64],
+    target: &[i64],
+) -> Vec<String> {
     let mut ops = Vec::new();
     let mut cur = target.to_vec();
     while cur != base {
-        let (prev, op) = from.get(&cur).expect("a reached target has a recorded predecessor");
+        let (prev, op) = from
+            .get(&cur)
+            .expect("a reached target has a recorded predecessor");
         ops.push(op.mnem());
         cur = prev.clone();
     }
@@ -526,7 +532,10 @@ mod tests {
     fn residue_overflow_shape_is_swap_pop() {
         // Vyper's `a + b` overflow check: input [b, a+b] -> residue [a+b].
         let run = parse_str(&format!("SWAP1 DUP2 LT {REV} JUMPI"));
-        assert_eq!(strip_residue(&run), Some(vec!["SWAP1".to_string(), "POP".to_string()]));
+        assert_eq!(
+            strip_residue(&run),
+            Some(vec!["SWAP1".to_string(), "POP".to_string()])
+        );
     }
 
     #[test]
@@ -540,8 +549,10 @@ mod tests {
     fn shuffle_equivalent(run: &[Instr], rep: &[String]) -> bool {
         let depth = min_input_depth(run).expect("a pure stack window must have a minimal depth");
         let base: Vec<i64> = (0..depth as i64).collect();
-        let rep_instrs: Vec<Instr> =
-            rep.iter().map(|m| Instr::new(Kind::Op, vec![m.clone()])).collect();
+        let rep_instrs: Vec<Instr> = rep
+            .iter()
+            .map(|m| Instr::new(Kind::Op, vec![m.clone()]))
+            .collect();
         run_shuffle(run, &base) == run_shuffle(&rep_instrs, &base)
     }
 
@@ -549,14 +560,22 @@ mod tests {
     fn shuffle_self_cancel_deletes_window() {
         // SWAP1 SWAP1 is a stack identity — the cheapest equivalent is nothing.
         let run = parse_str("SWAP1 SWAP1");
-        assert_eq!(minimize_shuffle(&run), Some(vec![]), "a self-cancelling swap pair was not deleted");
+        assert_eq!(
+            minimize_shuffle(&run),
+            Some(vec![]),
+            "a self-cancelling swap pair was not deleted"
+        );
     }
 
     #[test]
     fn shuffle_dup_then_pop_deletes_window() {
         // DUP2 POP duplicates a value just to discard it — a no-op, delete it.
         let run = parse_str("DUP2 POP");
-        assert_eq!(minimize_shuffle(&run), Some(vec![]), "a dup-then-pop no-op was not deleted");
+        assert_eq!(
+            minimize_shuffle(&run),
+            Some(vec![]),
+            "a dup-then-pop no-op was not deleted"
+        );
     }
 
     #[test]
@@ -565,10 +584,17 @@ mod tests {
         // five-op way to write DUP2 DUP2 (6 gas). Must reschedule to a strictly
         // cheaper, provably-equivalent sequence.
         let run = parse_str("SWAP1 DUP2 SWAP1 DUP1 SWAP3");
-        let rep = minimize_shuffle(&run).expect("a non-minimal venom shuffle was left unrescheduled");
-        assert!(shuffle_equivalent(&run, &rep), "the reschedule changed the window's stack effect");
+        let rep =
+            minimize_shuffle(&run).expect("a non-minimal venom shuffle was left unrescheduled");
+        assert!(
+            shuffle_equivalent(&run, &rep),
+            "the reschedule changed the window's stack effect"
+        );
         let rep_gas: u64 = rep.iter().map(|m| shuffle_gas(m)).sum();
-        assert!(rep_gas < 15, "the reschedule did not lower gas below the original 15: {rep_gas}");
+        assert!(
+            rep_gas < 15,
+            "the reschedule did not lower gas below the original 15: {rep_gas}"
+        );
     }
 
     #[test]
@@ -596,7 +622,10 @@ mod tests {
             );
             let before: u64 = run.iter().map(|i| shuffle_gas(i.mnem())).sum();
             let after: u64 = rep.iter().map(|m| shuffle_gas(m)).sum();
-            assert!(after < before, "the reschedule did not lower gas for {w}: {after} >= {before}");
+            assert!(
+                after < before,
+                "the reschedule did not lower gas for {w}: {after} >= {before}"
+            );
         }
     }
 
@@ -605,32 +634,56 @@ mod tests {
         // A deep permutation window like a large real contract emits has a factorial
         // search space; it must be skipped instantly (this exact shape hung the
         // rescheduler before the depth bound), not explored.
-        let run = parse_str("SWAP3 SWAP13 SWAP12 SWAP11 SWAP10 SWAP9 SWAP8 SWAP7 SWAP6 SWAP5 SWAP4 SWAP3");
+        let run = parse_str(
+            "SWAP3 SWAP13 SWAP12 SWAP11 SWAP10 SWAP9 SWAP8 SWAP7 SWAP6 SWAP5 SWAP4 SWAP3",
+        );
         let (rep, steps) = minimize_shuffle_counted(&run);
-        assert_eq!(rep, None, "a too-deep window must be skipped, not rewritten");
+        assert_eq!(
+            rep, None,
+            "a too-deep window must be skipped, not rewritten"
+        );
         assert_eq!(steps, 0, "a too-deep window must not be searched at all");
         let (_depth, feasible, _est) = reschedule_estimate(&run);
-        assert!(!feasible, "a deep permutation window must be reported infeasible");
+        assert!(
+            !feasible,
+            "a deep permutation window must be reported infeasible"
+        );
     }
 
     #[test]
     fn shuffle_already_minimal_is_left_alone() {
         // DUP2 DUP2 is already the cheapest sequence for its stack effect.
         let run = parse_str("DUP2 DUP2");
-        assert_eq!(minimize_shuffle(&run), None, "an already-minimal window was needlessly rewritten");
+        assert_eq!(
+            minimize_shuffle(&run),
+            None,
+            "an already-minimal window was needlessly rewritten"
+        );
     }
 
     #[test]
     fn shuffle_single_op_is_left_alone() {
         // A lone SWAP1 / POP cannot be made cheaper.
-        assert_eq!(minimize_shuffle(&parse_str("SWAP1")), None, "a lone SWAP1 was wrongly rewritten");
-        assert_eq!(minimize_shuffle(&parse_str("POP")), None, "a lone POP was wrongly rewritten");
+        assert_eq!(
+            minimize_shuffle(&parse_str("SWAP1")),
+            None,
+            "a lone SWAP1 was wrongly rewritten"
+        );
+        assert_eq!(
+            minimize_shuffle(&parse_str("POP")),
+            None,
+            "a lone POP was wrongly rewritten"
+        );
     }
 
     #[test]
     fn shuffle_rejects_non_stack_op() {
         // A window that is not purely stack ops must never be rescheduled.
-        assert_eq!(minimize_shuffle(&parse_str("ADD")), None, "a non-stack op was treated as a shuffle");
+        assert_eq!(
+            minimize_shuffle(&parse_str("ADD")),
+            None,
+            "a non-stack op was treated as a shuffle"
+        );
         assert_eq!(
             minimize_shuffle(&parse_str("DUP1 ADD POP")),
             None,

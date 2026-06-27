@@ -113,7 +113,12 @@ fn tables() -> &'static Tables {
     T.get_or_init(|| {
         let mut by_name = HashMap::new();
         let mut by_byte = HashMap::new();
-        let put = |name: String, b: u8, p: usize, s: usize, by_name: &mut HashMap<_, _>, by_byte: &mut HashMap<_, _>| {
+        let put = |name: String,
+                   b: u8,
+                   p: usize,
+                   s: usize,
+                   by_name: &mut HashMap<_, _>,
+                   by_byte: &mut HashMap<_, _>| {
             by_name.insert(name.clone(), (b, p, s));
             by_byte.insert(b, name);
         };
@@ -122,15 +127,36 @@ fn tables() -> &'static Tables {
         }
         // PUSH1..PUSH32 (0x60..0x7f): pops 0, pushes 1, n-byte immediate.
         for n in 1..=32u8 {
-            put(format!("PUSH{n}"), 0x5f + n, 0, 1, &mut by_name, &mut by_byte);
+            put(
+                format!("PUSH{n}"),
+                0x5f + n,
+                0,
+                1,
+                &mut by_name,
+                &mut by_byte,
+            );
         }
         // DUP1..DUP16 (0x80..0x8f) — nominal arity, see stack.rs.
         for n in 1..=16u8 {
-            put(format!("DUP{n}"), 0x7f + n, 0, 1, &mut by_name, &mut by_byte);
+            put(
+                format!("DUP{n}"),
+                0x7f + n,
+                0,
+                1,
+                &mut by_name,
+                &mut by_byte,
+            );
         }
         // SWAP1..SWAP16 (0x90..0x9f) — nominal arity, see stack.rs.
         for n in 1..=16u8 {
-            put(format!("SWAP{n}"), 0x8f + n, 0, 0, &mut by_name, &mut by_byte);
+            put(
+                format!("SWAP{n}"),
+                0x8f + n,
+                0,
+                0,
+                &mut by_name,
+                &mut by_byte,
+            );
         }
         Tables { by_name, by_byte }
     })

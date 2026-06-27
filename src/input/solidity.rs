@@ -56,7 +56,11 @@ pub fn load(path: &str, evm_version: Option<&str>) -> Result<Loaded, String> {
         return Err("solc returned empty bytecode".into());
     }
     // symbolic=false: this is raw bytecode, assembled back as-is.
-    Ok(Loaded { instrs, symbolic: false, kind: "solidity" })
+    Ok(Loaded {
+        instrs,
+        symbolic: false,
+        kind: "solidity",
+    })
 }
 
 /// Extract the hex after the header line `Binary of the runtime part:`.

@@ -113,7 +113,11 @@ fn shift_op(ins: &Instr) -> Option<Shift> {
 fn lit_to_be32(tok: &str) -> Option<[u8; 32]> {
     let mut out = [0u8; 32];
     if let Some(h) = tok.strip_prefix("0x").or_else(|| tok.strip_prefix("0X")) {
-        let h = if h.len() % 2 == 1 { format!("0{h}") } else { h.to_string() };
+        let h = if h.len() % 2 == 1 {
+            format!("0{h}")
+        } else {
+            h.to_string()
+        };
         let bytes: Vec<u8> = (0..h.len())
             .step_by(2)
             .map(|i| u8::from_str_radix(&h[i..i + 2], 16))
@@ -188,8 +192,16 @@ mod tests {
         // solc's address mask: PUSH1 1 PUSH1 0xa0 SHL == 1 << 160 == 0x01 then 20 zero bytes.
         let p = parse_str("PUSH1 1 PUSH1 0xa0 SHL");
         let (out, spans) = fold(&p);
-        assert_eq!(spans.len(), 1, "the constant 1<<160 materialization was not folded");
-        assert_eq!(spans[0].category, Category::FoldShift, "the span must carry the FoldShift category");
+        assert_eq!(
+            spans.len(),
+            1,
+            "the constant 1<<160 materialization was not folded"
+        );
+        assert_eq!(
+            spans[0].category,
+            Category::FoldShift,
+            "the span must carry the FoldShift category"
+        );
         assert_eq!(
             render(&out),
             format!("PUSH21 0x01{}", "00".repeat(20)),
@@ -203,28 +215,41 @@ mod tests {
         let p = parse_str("PUSH2 0x0100 PUSH1 8 SHR");
         let (out, spans) = fold(&p);
         assert_eq!(spans.len(), 1, "a constant SHR was not folded");
-        assert_eq!(render(&out), "PUSH1 0x01", "the SHR fold produced the wrong literal");
+        assert_eq!(
+            render(&out),
+            "PUSH1 0x01",
+            "the SHR fold produced the wrong literal"
+        );
     }
 
     #[test]
     fn ignores_general_arithmetic() {
         // Only the shift family is folded; PUSH a PUSH b ADD is left to the compiler.
         let p = parse_str("PUSH1 1 PUSH1 2 ADD");
-        assert!(scan(&p).is_empty(), "a non-shift binary op was wrongly folded");
+        assert!(
+            scan(&p).is_empty(),
+            "a non-shift binary op was wrongly folded"
+        );
     }
 
     #[test]
     fn ignores_single_operand() {
         // A shift needs two literal operands; one push is not a constant shift.
         let p = parse_str("PUSH1 8 SHL");
-        assert!(scan(&p).is_empty(), "a lone push before SHL was wrongly treated as a constant fold");
+        assert!(
+            scan(&p).is_empty(),
+            "a lone push before SHL was wrongly treated as a constant fold"
+        );
     }
 
     #[test]
     fn zero_result_is_not_folded() {
         // 1 >> 256 == 0 — folding to an empty/zero push is a separate concern, skip it.
         let p = parse_str("PUSH1 1 PUSH2 0x0100 SHR");
-        assert!(scan(&p).is_empty(), "a shift whose result is zero was wrongly folded");
+        assert!(
+            scan(&p).is_empty(),
+            "a shift whose result is zero was wrongly folded"
+        );
     }
 
     #[test]
@@ -232,6 +257,10 @@ mod tests {
         // 0xff << 8 == 0xff00 — a two-byte literal -> PUSH2, not a wider push.
         let p = parse_str("PUSH1 0xff PUSH1 8 SHL");
         let (out, _spans) = fold(&p);
-        assert_eq!(mnemonics(&out), vec!["PUSH2"], "the folded push was not sized to its minimal byte length");
+        assert_eq!(
+            mnemonics(&out),
+            vec!["PUSH2"],
+            "the folded push was not sized to its minimal byte length"
+        );
     }
 }

@@ -79,7 +79,8 @@ strictly in English.
 
 Run the CLI: `./target/debug/gasripper <input>` (or `cargo run -- <input>`). With only an
 input path, all features are on and it prints a strip report. Key flags: `--emit-asm`,
-`--emit-bytecode`, `--disable guards`, `--config <file>`, `--input-kind`, `--list-features`.
+`--emit-bytecode`, `--disable guards`, `--config <file>`, `--input-kind`, `--list-features`,
+`--inline-max-body <n>` (inline body-size threshold, default 20).
 
 ## Project documentation
 
@@ -106,23 +107,30 @@ Pipeline: **input frontend → instructions → `features::optimize` (feature-ga
   (no remaining reference + unreachable by fall-through), always-safe dead-code removal),
   `bytecode.rs`, `opcodes.rs`.
 - `src/features/` — one module per gas-reduction pass, each owning its `META` + a rewrite fn + tests.
-  Six today: `guards` (all revert-guard removal via `strip_guards`; the former `abi`/`math`/`assert`
+  Seven today: `guards` (all revert-guard removal via `strip_guards`; the former `abi`/`math`/`assert`
   split was a leaky opcode-sniff and was merged), `shuffle` (always-safe stack-shuffle rescheduling
-  via `core::stack::minimize_shuffle`, symbolic input only), `involution` (always-safe cancelling
-  of involutive op runs — `NOT NOT` → nothing — symbolic input only; venom leaves `NOT NOT` on
-  `~(~x)`, solc folds it), `recompute` (always-safe `OP DUP1` → `OP OP` for a cheap result-invariant
+  via `core::stack::minimize_shuffle`, symbolic input only), `involution` (always-safe `NOT NOT`
+  cancelling, symbolic only), `recompute` (always-safe `OP DUP1` → `OP OP` for a cheap result-invariant
   nullary opcode; length-preserving, so it runs on BOTH symbolic and concrete input — the one pass that
-  also lowers concrete `.hex`/`.bin` gas), and `fold_shift` (always-safe precompute of a constant
-  `PUSH a PUSH b SHL/SHR` into one push — e.g. solc's `1 << 160` address mask; length-changing so
-  symbolic input only, and it GROWS bytecode to lower per-call gas: the one pass that trades size for
-  gas, solc-only as venom never emits the idiom), and `cmpnorm` (always-safe fold of a `SWAP1` before a
-  strict-order comparison into the mirrored comparator — `SWAP1 LT` → `GT`; length-changing so symbolic
-  input only, venom-only as it emits `SWAP1 LT` when comparing two freshly-computed subexpressions while
-  solc orders operands via `DUP` depth). `features::optimize` runs the enabled passes and merges their edit spans
-  via `merge_nonoverlapping` (a later pass yields to an earlier one on overlap). Add a pass: a module
-  here, register its `META` in `features::registry()`, and run it from `features::optimize`.
+  also lowers concrete `.hex`/`.bin` gas), `fold_shift` (always-safe precompute of a constant
+  `PUSH a PUSH b SHL/SHR` into one push; length-changing/symbolic, and it GROWS bytecode to lower
+  per-call gas), `cmpnorm` (always-safe fold of a `SWAP1` before a strict-order comparison into the
+  mirrored comparator — `SWAP1 LT` → `GT`; length-changing/symbolic), and `inline` (relocate a small
+  `@internal` function with 2+ call sites into its call sites; `core::inline` analyses + de-threads,
+  `features::inline` orchestrates; three strategies — DE-THREAD a straight-line tail-return body
+  (`dethread_tail_return`), DE-THREAD a single-merge `if`/`else` diamond (`dethread_diamond`: deletes
+  the merge, joins both arms at a fall-through label, also drops venom's branch-arm double jump),
+  relocate any other branching body VERBATIM; length-changing/symbolic; the FIRST
+  feature with a numeric parameter — body-size threshold `inline_max_body`, default 20, via
+  `--inline-max-body`; runs FIRST so its spans take precedence, and optimizes each relocated body with
+  the other passes so it never raises gas). **Which passes actually FIRE on which compiler, the
+  venom/solc asm idioms and call/return conventions, the toolchain env vars, and the e2e gotchas live
+  in the `gasripper-vyper` and `gasripper-solidity` skills — invoke the matching one before working on
+  a language's output.** `features::optimize`/`optimize_with` run the enabled passes and merge their
+  edit spans via `merge_nonoverlapping` (a later pass yields to an earlier one on overlap). Add a pass:
+  a module here, register its `META` in `features::registry()`, and run it from `features::optimize_with`.
 - `src/config.rs` — `FeatureConfig` with precedence defaults → config file → CLI; `enabled_categories()`
-  feeds the engine.
+  feeds the engine; the one numeric parameter (`inline_max_body`) is read alongside the feature toggles.
 - `src/input/` — frontends produce `Loaded { instrs, symbolic, kind }`. `raw_asm`/`bytecode` are
   supported; `vyper`/`solidity` shell out to the compiler and are **experimental**.
 
@@ -137,8 +145,9 @@ deliberately **no hand-written linker** (wrong bytecode in a gas tool is dangero
 (`src/sidecar.rs` + `scripts/{vyper,solc}_sidecar.py`): the compiler emits symbolic runtime assembly,
 the Rust engine strips it, and the **compiler's own assembler** re-links (constructor untouched). A
 baseline invariant (assemble with no deletions == the compiler's reference bytecode) fails fast on
-drift. Toolchains come from `GASRIPPER_*` env vars. `revm` is a **dev-dependency only** (e2e gas
-proofs); the shipped binary stays pure `std`.
+drift. Toolchains come from `GASRIPPER_*` env vars (exact paths, the revert-idiom normalization, and
+the version-pinned gas caveat are in the `gasripper-vyper` / `gasripper-solidity` skills). `revm` is a
+**dev-dependency only** (e2e gas proofs); the shipped binary stays pure `std`.
 
 ## Safety invariants (do not break)
 

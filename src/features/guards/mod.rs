@@ -60,7 +60,11 @@ mod tests {
         // A bound read via DUP (x+1<100), reverting; x survives -> pure identity strip.
         let p = parse_str(&format!("DUP1 PUSH1 1 ADD PUSH1 100 LT {REV} JUMPI"));
         let (out, spans) = strip(&p);
-        assert!(mnemonics(&out).is_empty(), "overflow check not stripped: {:?}", mnemonics(&out));
+        assert!(
+            mnemonics(&out).is_empty(),
+            "overflow check not stripped: {:?}",
+            mnemonics(&out)
+        );
         assert_eq!(spans.len(), 1, "exactly one guard should be stripped");
     }
 
@@ -69,7 +73,11 @@ mod tests {
         // A calldata-length validation read via DUP is removed entirely.
         let p = parse_str(&format!("DUP1 CALLDATALOAD PUSH1 32 LT {REV} JUMPI"));
         let (out, spans) = strip(&p);
-        assert!(mnemonics(&out).is_empty(), "ABI check not stripped: {:?}", mnemonics(&out));
+        assert!(
+            mnemonics(&out).is_empty(),
+            "ABI check not stripped: {:?}",
+            mnemonics(&out)
+        );
         assert_eq!(spans.len(), 1, "exactly one guard should be stripped");
     }
 
@@ -78,7 +86,11 @@ mod tests {
         // A pure range/cast check via DUP (value >> 128 == 0) is removed.
         let p = parse_str(&format!("DUP1 PUSH1 128 SHR ISZERO {REV} JUMPI"));
         let (out, spans) = strip(&p);
-        assert!(mnemonics(&out).is_empty(), "range assert not stripped: {:?}", mnemonics(&out));
+        assert!(
+            mnemonics(&out).is_empty(),
+            "range assert not stripped: {:?}",
+            mnemonics(&out)
+        );
         assert_eq!(spans.len(), 1, "exactly one guard should be stripped");
     }
 
@@ -88,15 +100,25 @@ mod tests {
         let p = parse_str(&format!("PUSH1 5 GT {REV} JUMPI"));
         let (out, spans) = strip(&p);
         assert_eq!(spans.len(), 1, "the consuming check should be stripped");
-        assert_eq!(mnemonics(&out), vec!["POP"], "the residue strip must leave the equivalent POP");
+        assert_eq!(
+            mnemonics(&out),
+            vec!["POP"],
+            "the residue strip must leave the equivalent POP"
+        );
     }
 
     #[test]
     fn live_code_after_check_kept() {
         // Live code after the guard stays untouched.
-        let p = parse_str(&format!("CALLDATASIZE PUSH1 4 GT {REV} JUMPI PUSH1 0 CALLDATALOAD"));
+        let p = parse_str(&format!(
+            "CALLDATASIZE PUSH1 4 GT {REV} JUMPI PUSH1 0 CALLDATALOAD"
+        ));
         let (out, spans) = strip(&p);
-        assert_eq!(mnemonics(&out), vec!["PUSH1", "CALLDATALOAD"], "live code after the guard was altered");
+        assert_eq!(
+            mnemonics(&out),
+            vec!["PUSH1", "CALLDATALOAD"],
+            "live code after the guard was altered"
+        );
         assert_eq!(spans.len(), 1, "exactly one guard should be stripped");
     }
 

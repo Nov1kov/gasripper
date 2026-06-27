@@ -15,13 +15,14 @@ use std::collections::HashSet;
 use std::io::Write;
 
 use crate::core::Category;
-use crate::features::optimize;
+use crate::features::inline::DEFAULT_MAX_BODY;
+use crate::features::optimize_with;
 use crate::sidecar::Backend;
 
-use revm::context::result::{ExecutionResult, Output};
 use revm::context::TxEnv;
+use revm::context::result::{ExecutionResult, Output};
 use revm::database::InMemoryDB;
-use revm::primitives::{keccak256, Address, Bytes, TxKind, U256};
+use revm::primitives::{Address, Bytes, TxKind, U256, keccak256};
 use revm::{Context, ExecuteCommitEvm, MainBuilder, MainContext};
 use tracing_subscriber::EnvFilter;
 
@@ -70,15 +71,43 @@ impl Report {
 /// measured call gas before and after the strip, so any drift in a single gas unit
 /// fails the test (the per-feature READMEs document these same numbers).
 pub fn assert_win(r: &Report, lang: &str, expected: u64, gas_base: u64, gas_opt: u64) {
-    assert!(r.stripped >= 1, "{lang}: expected at least one check to strip");
-    assert_eq!(U256::from_be_slice(&r.out_base), U256::from(expected), "{lang}: wrong result");
-    assert_eq!(r.out_base, r.out_opt, "{lang}: optimized output must match baseline");
-    assert!(r.gas_opt < r.gas_base, "{lang}: strip should reduce call gas: {} -> {}", r.gas_base, r.gas_opt);
-    assert_eq!(r.gas_base, gas_base, "{lang}: baseline call gas drifted from pinned {gas_base} to {}", r.gas_base);
-    assert_eq!(r.gas_opt, gas_opt, "{lang}: optimized call gas drifted from pinned {gas_opt} to {}", r.gas_opt);
+    assert!(
+        r.stripped >= 1,
+        "{lang}: expected at least one check to strip"
+    );
+    assert_eq!(
+        U256::from_be_slice(&r.out_base),
+        U256::from(expected),
+        "{lang}: wrong result"
+    );
+    assert_eq!(
+        r.out_base, r.out_opt,
+        "{lang}: optimized output must match baseline"
+    );
+    assert!(
+        r.gas_opt < r.gas_base,
+        "{lang}: strip should reduce call gas: {} -> {}",
+        r.gas_base,
+        r.gas_opt
+    );
+    assert_eq!(
+        r.gas_base, gas_base,
+        "{lang}: baseline call gas drifted from pinned {gas_base} to {}",
+        r.gas_base
+    );
+    assert_eq!(
+        r.gas_opt, gas_opt,
+        "{lang}: optimized call gas drifted from pinned {gas_opt} to {}",
+        r.gas_opt
+    );
     tracing::info!(
         "{lang}: call gas {} -> {} (saved {}), creation {} -> {} bytes (saved {})",
-        r.gas_base, r.gas_opt, r.gas_saved(), r.bytes_before, r.bytes_after, r.bytes_saved(),
+        r.gas_base,
+        r.gas_opt,
+        r.gas_saved(),
+        r.bytes_before,
+        r.bytes_after,
+        r.bytes_saved(),
     );
 }
 
@@ -90,88 +119,229 @@ pub fn assert_win(r: &Report, lang: &str, expected: u64, gas_base: u64, gas_opt:
 /// `gas_base`/`gas_opt` pin the exact measured call gas before and after the strip
 /// (equal here, since a single-function contract has no hot selector dispatcher),
 /// so any drift in a single gas unit fails the test.
-pub fn assert_preserved_and_smaller(r: &Report, lang: &str, expected: u64, gas_base: u64, gas_opt: u64) {
-    assert!(r.stripped >= 1, "{lang}: expected a guard to strip without an auth wrapper");
-    assert_eq!(U256::from_be_slice(&r.out_base), U256::from(expected), "{lang}: wrong result");
-    assert_eq!(r.out_base, r.out_opt, "{lang}: optimized output must match baseline");
-    assert!(r.bytes_after < r.bytes_before, "{lang}: creation bytecode must shrink: {} -> {}", r.bytes_before, r.bytes_after);
-    assert!(r.gas_opt <= r.gas_base, "{lang}: gas must not increase: {} -> {}", r.gas_base, r.gas_opt);
-    assert_eq!(r.gas_base, gas_base, "{lang}: baseline call gas drifted from pinned {gas_base} to {}", r.gas_base);
-    assert_eq!(r.gas_opt, gas_opt, "{lang}: optimized call gas drifted from pinned {gas_opt} to {}", r.gas_opt);
-    tracing::info!(
-        "{lang} (no auth): stripped {}, call gas {} -> {}, creation {} -> {} bytes (saved {})",
-        r.stripped, r.gas_base, r.gas_opt, r.bytes_before, r.bytes_after, r.bytes_saved(),
-    );
-}
-
-/// Assertions for a LENGTH-PRESERVING feature (`recompute`): the rewrite swaps one
-/// single-byte opcode for another, so the creation bytecode is **exactly the same size**
-/// while the call uses strictly less gas. At least one rewrite applied and behavior
-/// preserved. `gas_base`/`gas_opt` pin the exact measured call gas before and after, so
-/// any single-gas-unit drift fails the test.
-pub fn assert_same_size_cheaper(r: &Report, lang: &str, expected: u64, gas_base: u64, gas_opt: u64) {
-    assert!(r.stripped >= 1, "{lang}: expected at least one recompute rewrite");
-    assert_eq!(U256::from_be_slice(&r.out_base), U256::from(expected), "{lang}: wrong result");
-    assert_eq!(r.out_base, r.out_opt, "{lang}: optimized output must match baseline");
-    assert_eq!(
-        r.bytes_after, r.bytes_before,
-        "{lang}: recompute must preserve bytecode size: {} -> {}", r.bytes_before, r.bytes_after
-    );
-    assert!(r.gas_opt < r.gas_base, "{lang}: recompute should reduce call gas: {} -> {}", r.gas_base, r.gas_opt);
-    assert_eq!(r.gas_base, gas_base, "{lang}: baseline call gas drifted from pinned {gas_base} to {}", r.gas_base);
-    assert_eq!(r.gas_opt, gas_opt, "{lang}: optimized call gas drifted from pinned {gas_opt} to {}", r.gas_opt);
-    tracing::info!(
-        "{lang} (recompute): rewrote {}, call gas {} -> {} (saved {}), creation {} bytes (unchanged)",
-        r.stripped, r.gas_base, r.gas_opt, r.gas_saved(), r.bytes_after,
-    );
-}
-
-/// Assertions for a SIZE-FOR-GAS feature (`foldshift`): precomputing a constant grows the
-/// creation bytecode (a literal push is wider than the `PUSH a PUSH b SHL` idiom) while the
-/// call uses strictly less gas. At least one fold applied and behavior preserved.
-/// `gas_base`/`gas_opt` pin the exact measured call gas before and after, so any single-gas
-/// drift fails the test.
-pub fn assert_cheaper_larger(r: &Report, lang: &str, expected: u64, gas_base: u64, gas_opt: u64) {
-    assert!(r.stripped >= 1, "{lang}: expected at least one constant shift to fold");
-    assert_eq!(U256::from_be_slice(&r.out_base), U256::from(expected), "{lang}: wrong result");
-    assert_eq!(r.out_base, r.out_opt, "{lang}: optimized output must match baseline");
+pub fn assert_preserved_and_smaller(
+    r: &Report,
+    lang: &str,
+    expected: u64,
+    gas_base: u64,
+    gas_opt: u64,
+) {
     assert!(
-        r.bytes_after > r.bytes_before,
-        "{lang}: foldshift trades size for gas — bytecode must grow: {} -> {}", r.bytes_before, r.bytes_after
+        r.stripped >= 1,
+        "{lang}: expected a guard to strip without an auth wrapper"
     );
-    assert!(r.gas_opt < r.gas_base, "{lang}: foldshift should reduce call gas: {} -> {}", r.gas_base, r.gas_opt);
-    assert_eq!(r.gas_base, gas_base, "{lang}: baseline call gas drifted from pinned {gas_base} to {}", r.gas_base);
-    assert_eq!(r.gas_opt, gas_opt, "{lang}: optimized call gas drifted from pinned {gas_opt} to {}", r.gas_opt);
-    tracing::info!(
-        "{lang} (foldshift): folded {}, call gas {} -> {} (saved {}), creation {} -> {} bytes (+{})",
-        r.stripped, r.gas_base, r.gas_opt, r.gas_saved(), r.bytes_before, r.bytes_after, -r.bytes_saved(),
+    assert_eq!(
+        U256::from_be_slice(&r.out_base),
+        U256::from(expected),
+        "{lang}: wrong result"
     );
-}
-
-/// Assertions for a LENGTH-REDUCING always-safe feature (e.g. `cmpnorm`): folding a window
-/// to fewer instructions shrinks the creation bytecode while the call uses strictly less gas.
-/// At least one fold applied and behavior preserved. `gas_base`/`gas_opt` pin the exact
-/// measured call gas before and after, so any single-gas drift fails the test.
-pub fn assert_smaller_cheaper(r: &Report, lang: &str, expected: u64, gas_base: u64, gas_opt: u64) {
-    assert!(r.stripped >= 1, "{lang}: expected at least one window to fold");
-    assert_eq!(U256::from_be_slice(&r.out_base), U256::from(expected), "{lang}: wrong result");
-    assert_eq!(r.out_base, r.out_opt, "{lang}: optimized output must match baseline");
+    assert_eq!(
+        r.out_base, r.out_opt,
+        "{lang}: optimized output must match baseline"
+    );
     assert!(
         r.bytes_after < r.bytes_before,
-        "{lang}: folding a window must shrink the bytecode: {} -> {}", r.bytes_before, r.bytes_after
+        "{lang}: creation bytecode must shrink: {} -> {}",
+        r.bytes_before,
+        r.bytes_after
     );
-    assert!(r.gas_opt < r.gas_base, "{lang}: the fold should reduce call gas: {} -> {}", r.gas_base, r.gas_opt);
-    assert_eq!(r.gas_base, gas_base, "{lang}: baseline call gas drifted from pinned {gas_base} to {}", r.gas_base);
-    assert_eq!(r.gas_opt, gas_opt, "{lang}: optimized call gas drifted from pinned {gas_opt} to {}", r.gas_opt);
+    assert!(
+        r.gas_opt <= r.gas_base,
+        "{lang}: gas must not increase: {} -> {}",
+        r.gas_base,
+        r.gas_opt
+    );
+    assert_eq!(
+        r.gas_base, gas_base,
+        "{lang}: baseline call gas drifted from pinned {gas_base} to {}",
+        r.gas_base
+    );
+    assert_eq!(
+        r.gas_opt, gas_opt,
+        "{lang}: optimized call gas drifted from pinned {gas_opt} to {}",
+        r.gas_opt
+    );
     tracing::info!(
-        "{lang} (cmpnorm): folded {}, call gas {} -> {} (saved {}), creation {} -> {} bytes (saved {})",
-        r.stripped, r.gas_base, r.gas_opt, r.gas_saved(), r.bytes_before, r.bytes_after, r.bytes_saved(),
+        "{lang} (no auth): stripped {}, call gas {} -> {}, creation {} -> {} bytes (saved {})",
+        r.stripped,
+        r.gas_base,
+        r.gas_opt,
+        r.bytes_before,
+        r.bytes_after,
+        r.bytes_saved(),
+    );
+}
+
+/// Assertions for a SIZE-NEUTRAL feature: the rewrite leaves the creation bytecode **exactly the
+/// same size** while the call uses strictly less gas — `recompute` (one single-byte opcode for
+/// another) and `inline` de-threading a diamond whose de-threaded copies happen to match the
+/// original function plus its call/return glue. At least one rewrite applied and behavior preserved.
+/// `gas_base`/`gas_opt` pin the exact measured call gas before and after, so any single-gas-unit
+/// drift fails the test.
+pub fn assert_same_size_cheaper(
+    r: &Report,
+    lang: &str,
+    expected: u64,
+    gas_base: u64,
+    gas_opt: u64,
+) {
+    assert!(
+        r.stripped >= 1,
+        "{lang}: expected at least one size-neutral rewrite"
+    );
+    assert_eq!(
+        U256::from_be_slice(&r.out_base),
+        U256::from(expected),
+        "{lang}: wrong result"
+    );
+    assert_eq!(
+        r.out_base, r.out_opt,
+        "{lang}: optimized output must match baseline"
+    );
+    assert_eq!(
+        r.bytes_after, r.bytes_before,
+        "{lang}: a size-neutral rewrite must preserve bytecode size: {} -> {}",
+        r.bytes_before, r.bytes_after
+    );
+    assert!(
+        r.gas_opt < r.gas_base,
+        "{lang}: the rewrite should reduce call gas: {} -> {}",
+        r.gas_base,
+        r.gas_opt
+    );
+    assert_eq!(
+        r.gas_base, gas_base,
+        "{lang}: baseline call gas drifted from pinned {gas_base} to {}",
+        r.gas_base
+    );
+    assert_eq!(
+        r.gas_opt, gas_opt,
+        "{lang}: optimized call gas drifted from pinned {gas_opt} to {}",
+        r.gas_opt
+    );
+    tracing::info!(
+        "{lang} (size-neutral): rewrote {}, call gas {} -> {} (saved {}), creation {} bytes (unchanged)",
+        r.stripped,
+        r.gas_base,
+        r.gas_opt,
+        r.gas_saved(),
+        r.bytes_after,
+    );
+}
+
+/// Assertions for a SIZE-FOR-GAS feature: the rewrite grows the creation bytecode while the call
+/// uses strictly less gas — `foldshift` (a literal push is wider than the `PUSH a PUSH b SHL`
+/// idiom) and `inline` with two or more call sites (each copies the body). At least one rewrite
+/// applied and behavior preserved. `gas_base`/`gas_opt` pin the exact measured call gas before
+/// and after, so any single-gas drift fails the test.
+pub fn assert_cheaper_larger(r: &Report, lang: &str, expected: u64, gas_base: u64, gas_opt: u64) {
+    assert!(
+        r.stripped >= 1,
+        "{lang}: expected at least one size-for-gas rewrite"
+    );
+    assert_eq!(
+        U256::from_be_slice(&r.out_base),
+        U256::from(expected),
+        "{lang}: wrong result"
+    );
+    assert_eq!(
+        r.out_base, r.out_opt,
+        "{lang}: optimized output must match baseline"
+    );
+    assert!(
+        r.bytes_after > r.bytes_before,
+        "{lang}: a size-for-gas rewrite must grow the bytecode: {} -> {}",
+        r.bytes_before,
+        r.bytes_after
+    );
+    assert!(
+        r.gas_opt < r.gas_base,
+        "{lang}: a size-for-gas rewrite should reduce call gas: {} -> {}",
+        r.gas_base,
+        r.gas_opt
+    );
+    assert_eq!(
+        r.gas_base, gas_base,
+        "{lang}: baseline call gas drifted from pinned {gas_base} to {}",
+        r.gas_base
+    );
+    assert_eq!(
+        r.gas_opt, gas_opt,
+        "{lang}: optimized call gas drifted from pinned {gas_opt} to {}",
+        r.gas_opt
+    );
+    tracing::info!(
+        "{lang} (size-for-gas): rewrote {}, call gas {} -> {} (saved {}), creation {} -> {} bytes (+{})",
+        r.stripped,
+        r.gas_base,
+        r.gas_opt,
+        r.gas_saved(),
+        r.bytes_before,
+        r.bytes_after,
+        -r.bytes_saved(),
+    );
+}
+
+/// Assertions for a LENGTH-REDUCING always-safe feature: the rewrite shrinks the creation bytecode
+/// while the call uses strictly less gas — `cmpnorm` (folding a window to fewer instructions) and
+/// `inline` de-threading a tail-return helper (the relocated bodies are smaller than the original
+/// function + its call indirection). At least one rewrite applied and behavior preserved.
+/// `gas_base`/`gas_opt` pin the exact measured call gas before and after, so any single-gas drift
+/// fails the test.
+pub fn assert_smaller_cheaper(r: &Report, lang: &str, expected: u64, gas_base: u64, gas_opt: u64) {
+    assert!(
+        r.stripped >= 1,
+        "{lang}: expected at least one size-reducing rewrite"
+    );
+    assert_eq!(
+        U256::from_be_slice(&r.out_base),
+        U256::from(expected),
+        "{lang}: wrong result"
+    );
+    assert_eq!(
+        r.out_base, r.out_opt,
+        "{lang}: optimized output must match baseline"
+    );
+    assert!(
+        r.bytes_after < r.bytes_before,
+        "{lang}: the rewrite must shrink the bytecode: {} -> {}",
+        r.bytes_before,
+        r.bytes_after
+    );
+    assert!(
+        r.gas_opt < r.gas_base,
+        "{lang}: the rewrite should reduce call gas: {} -> {}",
+        r.gas_base,
+        r.gas_opt
+    );
+    assert_eq!(
+        r.gas_base, gas_base,
+        "{lang}: baseline call gas drifted from pinned {gas_base} to {}",
+        r.gas_base
+    );
+    assert_eq!(
+        r.gas_opt, gas_opt,
+        "{lang}: optimized call gas drifted from pinned {gas_opt} to {}",
+        r.gas_opt
+    );
+    tracing::info!(
+        "{lang} (size-reducing): rewrote {}, call gas {} -> {} (saved {}), creation {} -> {} bytes (saved {})",
+        r.stripped,
+        r.gas_base,
+        r.gas_opt,
+        r.gas_saved(),
+        r.bytes_before,
+        r.bytes_after,
+        r.bytes_saved(),
     );
 }
 
 fn hex_to_bytes(s: &str) -> Vec<u8> {
     let s = s.strip_prefix("0x").unwrap_or(s);
-    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+        .collect()
 }
 
 /// Write `src` to a uniquely-named temp file and return its path string.
@@ -194,8 +364,15 @@ pub fn encode_call(signature: &str, args: &[u64]) -> Vec<u8> {
 
 /// Deploy `creation` from `deployer`, then call it from `caller` with `calldata`,
 /// returning the raw execution result (may be a revert — for auth checks).
-pub fn deploy_then_call(creation: &str, deployer: Address, caller: Address, calldata: Vec<u8>) -> ExecutionResult {
-    let mut evm = Context::mainnet().with_db(InMemoryDB::default()).build_mainnet();
+pub fn deploy_then_call(
+    creation: &str,
+    deployer: Address,
+    caller: Address,
+    calldata: Vec<u8>,
+) -> ExecutionResult {
+    let mut evm = Context::mainnet()
+        .with_db(InMemoryDB::default())
+        .build_mainnet();
 
     let deploy = TxEnv::builder()
         .caller(deployer)
@@ -207,7 +384,10 @@ pub fn deploy_then_call(creation: &str, deployer: Address, caller: Address, call
         .build()
         .unwrap();
     let addr = match evm.transact_commit(deploy).unwrap() {
-        ExecutionResult::Success { output: Output::Create(_, Some(a)), .. } => a,
+        ExecutionResult::Success {
+            output: Output::Create(_, Some(a)),
+            ..
+        } => a,
         other => panic!("deploy failed: {other:?}"),
     };
 
@@ -226,7 +406,11 @@ pub fn deploy_then_call(creation: &str, deployer: Address, caller: Address, call
 /// Deploy `creation` from `caller`, call it with `calldata`, return (gas_used, output).
 pub fn deploy_and_call(creation: &str, caller: Address, calldata: Vec<u8>) -> (u64, Vec<u8>) {
     match deploy_then_call(creation, caller, caller, calldata) {
-        ExecutionResult::Success { gas, output: Output::Call(out), .. } => (gas.tx_gas_used(), out.to_vec()),
+        ExecutionResult::Success {
+            gas,
+            output: Output::Call(out),
+            ..
+        } => (gas.tx_gas_used(), out.to_vec()),
         other => panic!("call failed: {other:?}"),
     }
 }
@@ -256,12 +440,24 @@ pub fn measure_set(
     categories: &HashSet<Category>,
     calldata: Vec<u8>,
 ) -> Result<Report, String> {
+    measure_set_with(backend, source_path, categories, calldata, DEFAULT_MAX_BODY)
+}
+
+/// [`measure_set`] with an explicit inline body-size threshold, for proving the inline pass on a
+/// helper whose body exceeds the default ([`DEFAULT_MAX_BODY`]).
+pub fn measure_set_with(
+    backend: &Backend,
+    source_path: &str,
+    categories: &HashSet<Category>,
+    calldata: Vec<u8>,
+    inline_max: usize,
+) -> Result<Report, String> {
     init_tracing();
     // 1. Compile + read runtime instructions (Err -> caller skips).
     let dump = backend.dump(source_path, None)?;
 
     // 2. Run the requested categories' passes.
-    let (_optimized, spans) = optimize(&dump.instrs, categories);
+    let (_optimized, spans) = optimize_with(&dump.instrs, categories, inline_max);
 
     // 3. Re-assemble baseline and optimized creation bytecode.
     let base = backend.build(source_path, &[], None)?;
@@ -296,5 +492,27 @@ pub fn measure(
     only: Category,
     calldata: Vec<u8>,
 ) -> Result<Report, String> {
-    measure_set(backend, source_path, &[only].into_iter().collect(), calldata)
+    measure_set(
+        backend,
+        source_path,
+        &[only].into_iter().collect(),
+        calldata,
+    )
+}
+
+/// [`measure`] with an explicit inline body-size threshold.
+pub fn measure_with(
+    backend: &Backend,
+    source_path: &str,
+    only: Category,
+    calldata: Vec<u8>,
+    inline_max: usize,
+) -> Result<Report, String> {
+    measure_set_with(
+        backend,
+        source_path,
+        &[only].into_iter().collect(),
+        calldata,
+        inline_max,
+    )
 }

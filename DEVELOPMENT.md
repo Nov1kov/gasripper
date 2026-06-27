@@ -112,23 +112,26 @@ while shrinking the creation bytecode 203 → 202. It is Vyper-specific: solc se
 measure call gas on revm with a growing set of enabled passes, asserting the result is unchanged while
 gas only falls: Vyper guards 22374 → +shuffle 22326 → +involution 22296 → +recompute 22291; Solidity
 recompute 44801 → +guards 44562 → +foldshift 44550. They exercise the pass-merge precedence
-(guards > shuffle > involution > foldshift > cmpnorm > recompute; an overlapping later span is
+(inline > guards > shuffle > involution > foldshift > cmpnorm > recompute; an overlapping later span is
 dropped) and lock the guards+foldshift regression: foldshift may fold the `PUSH sel PUSH 0xe0 SHL`
 Panic-selector inside an inverse guard's inline revert block that guards' DCE deletes — the solc
 sidecar's `_apply_edits` must drop that index rather than strand the folded push (else `InvalidJump`).
 
 ## Adding a feature
 
-A feature is one independent gas-reduction pass. Six ship today: `guards` (trusted-caller revert
+A feature is one independent gas-reduction pass. Seven ship today: `guards` (trusted-caller revert
 removal, `src/features/guards/`), `shuffle` (always-safe stack rescheduling, `src/features/shuffle/`),
 `involution` (always-safe `NOT NOT` cancelling, `src/features/involution/`), `recompute`
 (always-safe `OP DUP1` → `OP OP` recompute, `src/features/recompute/`), `foldshift` (always-safe
-constant `PUSH a PUSH b SHL/SHR` folding, `src/features/fold_shift/`), and `cmpnorm` (always-safe
-`SWAP1 LT` → `GT` comparison normalization, `src/features/cmpnorm/`) — each a reference
-module of `mod.rs` + `README.md` + `e2e.rs`. `shuffle`, `involution`, and `recompute` show a pass need
-not be guard-removal: each owns its own `Category` and runs its own `scan` instead of `strip_guards`, and
-the orchestrator (`features::optimize`) runs every enabled pass and merges their edit spans (a later
-pass yields to an earlier one on an overlap, via `merge_nonoverlapping`). To add another pass, create
+constant `PUSH a PUSH b SHL/SHR` folding, `src/features/fold_shift/`), `cmpnorm` (always-safe
+`SWAP1 LT` → `GT` comparison normalization, `src/features/cmpnorm/`), and `inline` (always-safe
+relocation of a small Vyper `@internal` function with 2+ call sites into its call sites — analysis in
+`core::inline`, orchestration in `src/features/inline/` — the first feature with a numeric parameter,
+`--inline-max-body`) — each a reference module of `mod.rs` + `README.md` + `e2e.rs`. `shuffle`,
+`involution`, and `recompute` show a pass need not be guard-removal: each owns its own `Category` and
+runs its own `scan` instead of `strip_guards`, and the orchestrator (`features::optimize_with`) runs
+every enabled pass and merges their edit spans (a later pass yields to an earlier one on an overlap,
+via `merge_nonoverlapping`). To add another pass, create
 a module, reuse the shared engine / sidecar / e2e harness (DRY — add new shared helpers to those,
 don't inline), register its `META` in `features::registry()`, and run it from `features::optimize`.
 Keep the binary pure-`std` and warning-free.

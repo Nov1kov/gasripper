@@ -20,14 +20,15 @@ use std::collections::HashSet;
 use crate::core::asm::is_symbolic;
 use crate::core::{Category, Instr, Span, apply_spans, strip_guards};
 
+pub mod cmpnorm;
 #[cfg(test)]
 pub mod e2e_harness;
-#[cfg(test)]
-mod progressive_e2e;
-pub mod cmpnorm;
 pub mod fold_shift;
 pub mod guards;
+pub mod inline;
 pub mod involution;
+#[cfg(test)]
+mod progressive_e2e;
 pub mod recompute;
 pub mod shuffle;
 
@@ -49,6 +50,7 @@ pub struct FeatureMeta {
 /// The full registry of available features.
 pub fn registry() -> Vec<FeatureMeta> {
     vec![
+        inline::META,
         guards::META,
         shuffle::META,
         involution::META,
@@ -81,18 +83,35 @@ fn merge_nonoverlapping(spans: &mut Vec<Span>, candidates: Vec<Span>) {
     spans.sort_by_key(|s| s.start);
 }
 
-/// Run the enabled passes over `instrs`, returning the rewritten program and every
-/// applied edit span (on original indices).
-///
-/// Guard removal runs first. The length-changing passes — stack-shuffle rescheduling,
-/// involution cancelling, shift-constant folding, and comparison normalization — run
-/// only on symbolic programs: they change instruction lengths and rely on the
-/// sidecar/compiler to relink jumps, which the concrete-bytecode path cannot do.
-/// Recompute is length-preserving (one single-byte opcode for another), so it runs on
-/// every program — including concrete bytecode. A later pass's span that overlaps one
-/// already accepted is dropped, so the merged edit set stays non-overlapping.
+/// Run the enabled passes over `instrs` with the default inline threshold
+/// ([`inline::DEFAULT_MAX_BODY`]). See [`optimize_with`].
 pub fn optimize(instrs: &[Instr], enabled: &HashSet<Category>) -> (Vec<Instr>, Vec<Span>) {
-    let (_, mut spans) = strip_guards(instrs, enabled);
+    optimize_with(instrs, enabled, inline::DEFAULT_MAX_BODY)
+}
+
+/// Run the enabled passes over `instrs`, returning the rewritten program and every applied edit
+/// span (on original indices). `inline_max` bounds the body size the inline pass will relocate.
+///
+/// Inline runs FIRST so its definition-deletion and call-site spans take precedence: a later
+/// pass cannot rewrite code that inline relocates or deletes. It (like the other length-changing
+/// passes — stack-shuffle rescheduling, involution cancelling, shift-constant folding, and
+/// comparison normalization) runs only on symbolic programs: it changes instruction lengths and
+/// emits symbolic labels the sidecar/compiler relinks, which the concrete-bytecode path cannot
+/// do. Guard removal runs next, then the remaining always-safe passes. Recompute is
+/// length-preserving (one single-byte opcode for another), so it runs on every program —
+/// including concrete bytecode. A later pass's span that overlaps one already accepted is
+/// dropped, so the merged edit set stays non-overlapping.
+pub fn optimize_with(
+    instrs: &[Instr],
+    enabled: &HashSet<Category>,
+    inline_max: usize,
+) -> (Vec<Instr>, Vec<Span>) {
+    let mut spans: Vec<Span> = Vec::new();
+    if is_symbolic(instrs) && enabled.contains(&Category::Inline) {
+        merge_nonoverlapping(&mut spans, inline::scan(instrs, enabled, inline_max));
+    }
+    let (_, guard_spans) = strip_guards(instrs, enabled);
+    merge_nonoverlapping(&mut spans, guard_spans);
     if is_symbolic(instrs) {
         if enabled.contains(&Category::Shuffle) {
             merge_nonoverlapping(&mut spans, shuffle::scan(instrs));
@@ -127,8 +146,16 @@ mod tests {
         // A symbolic label makes the program relinkable, so the reschedule runs.
         let p = parse_str("_sym_x JUMPDEST SWAP1 SWAP1 STOP");
         let (_out, spans) = optimize(&p, &only(Category::Shuffle));
-        assert_eq!(spans.len(), 1, "a reschedulable window in a symbolic program was not rewritten");
-        assert_eq!(spans[0].category, Category::Shuffle, "the span must carry the Shuffle category");
+        assert_eq!(
+            spans.len(),
+            1,
+            "a reschedulable window in a symbolic program was not rewritten"
+        );
+        assert_eq!(
+            spans[0].category,
+            Category::Shuffle,
+            "the span must carry the Shuffle category"
+        );
     }
 
     #[test]
@@ -136,9 +163,15 @@ mod tests {
         // Same reschedulable window, but a fully concrete program: rewriting it would
         // shift JUMPDEST offsets with no linker to fix them, so the pass must skip it.
         let p = parse_str("PUSH1 1 SWAP1 SWAP1 PUSH1 2");
-        assert!(!is_symbolic(&p), "the test program must be concrete for this invariant");
+        assert!(
+            !is_symbolic(&p),
+            "the test program must be concrete for this invariant"
+        );
         let (_out, spans) = optimize(&p, &only(Category::Shuffle));
-        assert!(spans.is_empty(), "shuffle wrongly rewrote a concrete program (would break jumps)");
+        assert!(
+            spans.is_empty(),
+            "shuffle wrongly rewrote a concrete program (would break jumps)"
+        );
     }
 
     #[test]
@@ -146,8 +179,16 @@ mod tests {
         // A symbolic label makes the program relinkable, so the NOT pair is cancelled.
         let p = parse_str("_sym_x JUMPDEST NOT NOT STOP");
         let (_out, spans) = optimize(&p, &only(Category::Involution));
-        assert_eq!(spans.len(), 1, "a cancelling NOT pair in a symbolic program was not removed");
-        assert_eq!(spans[0].category, Category::Involution, "the span must carry the Involution category");
+        assert_eq!(
+            spans.len(),
+            1,
+            "a cancelling NOT pair in a symbolic program was not removed"
+        );
+        assert_eq!(
+            spans[0].category,
+            Category::Involution,
+            "the span must carry the Involution category"
+        );
     }
 
     #[test]
@@ -155,9 +196,15 @@ mod tests {
         // A fully concrete program: cancelling the NOT pair would shift JUMPDEST offsets
         // with no linker to fix them, so the pass must skip it.
         let p = parse_str("PUSH1 1 NOT NOT PUSH1 2");
-        assert!(!is_symbolic(&p), "the test program must be concrete for this invariant");
+        assert!(
+            !is_symbolic(&p),
+            "the test program must be concrete for this invariant"
+        );
         let (_out, spans) = optimize(&p, &only(Category::Involution));
-        assert!(spans.is_empty(), "involution wrongly rewrote a concrete program (would break jumps)");
+        assert!(
+            spans.is_empty(),
+            "involution wrongly rewrote a concrete program (would break jumps)"
+        );
     }
 
     #[test]
@@ -165,8 +212,16 @@ mod tests {
         // A symbolic label makes the program relinkable, so the SWAP1/LT folds to GT.
         let p = parse_str("_sym_x JUMPDEST SWAP1 LT STOP");
         let (_out, spans) = optimize(&p, &only(Category::CmpNorm));
-        assert_eq!(spans.len(), 1, "a foldable SWAP1/LT in a symbolic program was not rewritten");
-        assert_eq!(spans[0].category, Category::CmpNorm, "the span must carry the CmpNorm category");
+        assert_eq!(
+            spans.len(),
+            1,
+            "a foldable SWAP1/LT in a symbolic program was not rewritten"
+        );
+        assert_eq!(
+            spans[0].category,
+            Category::CmpNorm,
+            "the span must carry the CmpNorm category"
+        );
     }
 
     #[test]
@@ -174,8 +229,14 @@ mod tests {
         // Same foldable window, but a fully concrete program: folding it would shift
         // JUMPDEST offsets with no linker to fix them, so the pass must skip it.
         let p = parse_str("PUSH1 1 PUSH1 2 SWAP1 LT PUSH1 3");
-        assert!(!is_symbolic(&p), "the test program must be concrete for this invariant");
+        assert!(
+            !is_symbolic(&p),
+            "the test program must be concrete for this invariant"
+        );
         let (_out, spans) = optimize(&p, &only(Category::CmpNorm));
-        assert!(spans.is_empty(), "cmpnorm wrongly rewrote a concrete program (would break jumps)");
+        assert!(
+            spans.is_empty(),
+            "cmpnorm wrongly rewrote a concrete program (would break jumps)"
+        );
     }
 }

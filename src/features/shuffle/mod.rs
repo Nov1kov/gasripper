@@ -112,12 +112,17 @@ fn log_estimate(instrs: &[Instr], windows: &[(usize, usize)]) {
         tracing::info!(
             "shuffle: {} windows — {searchable} searchable (~{:.0}k steps, ~{:.1}s), \
              {deep} too deep to optimize (brute force ~{:.0e} ops each, skipped)",
-            windows.len(), steps / 1000.0, steps / STEPS_PER_SEC, worst,
+            windows.len(),
+            steps / 1000.0,
+            steps / STEPS_PER_SEC,
+            worst,
         );
     } else {
         tracing::info!(
             "shuffle: {} windows, ~{:.0}k search steps (~{:.1}s)",
-            windows.len(), steps / 1000.0, steps / STEPS_PER_SEC,
+            windows.len(),
+            steps / 1000.0,
+            steps / STEPS_PER_SEC,
         );
     }
 }
@@ -144,7 +149,12 @@ pub fn scan(instrs: &[Instr]) -> Vec<Span> {
         let (replacement, steps) = minimize_shuffle_counted(&instrs[start..=end]);
         steps_done += steps as u64;
         if let Some(replacement) = replacement {
-            spans.push(Span { start, end, category: Category::Shuffle, replacement });
+            spans.push(Span {
+                start,
+                end,
+                category: Category::Shuffle,
+                replacement,
+            });
         } else if steps == 0 {
             // (None, 0) means the window was too deep and skipped without searching.
             skipped += 1;
@@ -154,14 +164,23 @@ pub fn scan(instrs: &[Instr]) -> Vec<Span> {
             let eta = clock.elapsed().mul_f64((1.0 - frac) / frac);
             tracing::info!(
                 "shuffle: {}/{} windows ({:.0}%), {} rescheduled, {} steps, ~{:.1}s left",
-                idx + 1, windows.len(), frac * 100.0, spans.len(), steps_done, eta.as_secs_f64(),
+                idx + 1,
+                windows.len(),
+                frac * 100.0,
+                spans.len(),
+                steps_done,
+                eta.as_secs_f64(),
             );
         }
     }
     if report {
         tracing::info!(
             "shuffle: {} windows in {:.2}s — {} rescheduled, {} too deep (skipped), {} search steps",
-            windows.len(), clock.elapsed().as_secs_f64(), spans.len(), skipped, steps_done,
+            windows.len(),
+            clock.elapsed().as_secs_f64(),
+            spans.len(),
+            skipped,
+            steps_done,
         );
     }
     spans
@@ -185,13 +204,20 @@ mod tests {
         // The recurring real-Vyper leftover collapses to its two-op equivalent.
         let p = parse_str("SWAP1 DUP2 SWAP1 DUP1 SWAP3");
         let (out, spans) = reschedule(&p);
-        assert_eq!(spans.len(), 1, "the non-minimal shuffle window was not rescheduled");
+        assert_eq!(
+            spans.len(),
+            1,
+            "the non-minimal shuffle window was not rescheduled"
+        );
         let gas_before = 15u64;
         let gas_after: u64 = out
             .iter()
             .map(|i| if i.mnem() == "POP" { 2 } else { 3 })
             .sum();
-        assert!(gas_after < gas_before, "the reschedule did not lower gas: {gas_after} >= {gas_before}");
+        assert!(
+            gas_after < gas_before,
+            "the reschedule did not lower gas: {gas_after} >= {gas_before}"
+        );
     }
 
     #[test]
@@ -199,8 +225,16 @@ mod tests {
         // SWAP1 SWAP1 is an identity — the whole window is deleted.
         let p = parse_str("SWAP1 SWAP1");
         let (out, spans) = reschedule(&p);
-        assert_eq!(spans.len(), 1, "a self-cancelling swap pair was not rescheduled");
-        assert!(mnemonics(&out).is_empty(), "the identity window was not deleted: {:?}", mnemonics(&out));
+        assert_eq!(
+            spans.len(),
+            1,
+            "a self-cancelling swap pair was not rescheduled"
+        );
+        assert!(
+            mnemonics(&out).is_empty(),
+            "the identity window was not deleted: {:?}",
+            mnemonics(&out)
+        );
     }
 
     #[test]
@@ -209,7 +243,10 @@ mod tests {
         // alone) is reschedulable, so nothing fires across the ADD.
         let p = parse_str("DUP1 ADD POP");
         let (_out, spans) = reschedule(&p);
-        assert!(spans.is_empty(), "a window was wrongly grown across a non-stack op");
+        assert!(
+            spans.is_empty(),
+            "a window was wrongly grown across a non-stack op"
+        );
     }
 
     #[test]
@@ -217,7 +254,10 @@ mod tests {
         // A JUMPDEST label ends a basic block; a window may not span it.
         let p = parse_str("DUP2 _sym_x JUMPDEST POP");
         let spans = scan(&p);
-        assert!(spans.is_empty(), "a shuffle window wrongly crossed a label boundary");
+        assert!(
+            spans.is_empty(),
+            "a shuffle window wrongly crossed a label boundary"
+        );
     }
 
     #[test]
@@ -225,6 +265,9 @@ mod tests {
         // DUP2 DUP2 is already the cheapest sequence for its effect.
         let p = parse_str("DUP2 DUP2");
         let (_out, spans) = reschedule(&p);
-        assert!(spans.is_empty(), "an already-minimal window was needlessly rewritten");
+        assert!(
+            spans.is_empty(),
+            "an already-minimal window was needlessly rewritten"
+        );
     }
 }

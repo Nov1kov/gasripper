@@ -38,6 +38,8 @@ pub enum Category {
     FoldShift,
     /// A `SWAP1` before a comparison folded into the mirrored comparator (`SWAP1 LT` -> `GT`).
     CmpNorm,
+    /// A small internal function inlined into its call sites (the call/return indirection removed).
+    Inline,
 }
 
 impl Category {
@@ -51,6 +53,7 @@ impl Category {
             Category::Recompute => "recompute",
             Category::FoldShift => "foldshift",
             Category::CmpNorm => "cmpnorm",
+            Category::Inline => "inline",
         }
     }
 }
@@ -75,10 +78,31 @@ fn is_auth(m: &str) -> bool {
 fn is_side(m: &str) -> bool {
     matches!(
         m,
-        "SSTORE" | "TSTORE" | "MSTORE" | "MSTORE8" | "LOG0" | "LOG1" | "LOG2" | "LOG3" | "LOG4"
-            | "CALL" | "CALLCODE" | "DELEGATECALL" | "STATICCALL" | "CREATE" | "CREATE2"
-            | "SELFDESTRUCT" | "RETURN" | "REVERT" | "STOP" | "INVALID"
-            | "CALLDATACOPY" | "CODECOPY" | "RETURNDATACOPY" | "EXTCODECOPY" | "MCOPY"
+        "SSTORE"
+            | "TSTORE"
+            | "MSTORE"
+            | "MSTORE8"
+            | "LOG0"
+            | "LOG1"
+            | "LOG2"
+            | "LOG3"
+            | "LOG4"
+            | "CALL"
+            | "CALLCODE"
+            | "DELEGATECALL"
+            | "STATICCALL"
+            | "CREATE"
+            | "CREATE2"
+            | "SELFDESTRUCT"
+            | "RETURN"
+            | "REVERT"
+            | "STOP"
+            | "INVALID"
+            | "CALLDATACOPY"
+            | "CODECOPY"
+            | "RETURNDATACOPY"
+            | "EXTCODECOPY"
+            | "MCOPY"
     )
 }
 
@@ -190,7 +214,12 @@ pub fn strip_guards(instrs: &[Instr], enabled: &HashSet<Category>) -> (Vec<Instr
 
             if let Some((f, rep)) = best {
                 if enabled.contains(&Category::Guard) {
-                    spans.push(Span { start: f, end: j, category: Category::Guard, replacement: rep });
+                    spans.push(Span {
+                        start: f,
+                        end: j,
+                        category: Category::Guard,
+                        replacement: rep,
+                    });
                 }
             }
         }
@@ -259,7 +288,12 @@ fn dead_revert_spans(instrs: &[Instr], referenced: &HashSet<String>) -> Vec<Span
             .iter()
             .position(|x| x.kind == Kind::Label)
             .map_or(instrs.len() - 1, |off| i + off);
-        out.push(Span { start: i, end, category: Category::Guard, replacement: Vec::new() });
+        out.push(Span {
+            start: i,
+            end,
+            category: Category::Guard,
+            replacement: Vec::new(),
+        });
     }
     out
 }
@@ -325,7 +359,10 @@ mod tests {
     #[test]
     fn side_effect_preserved() {
         let (flat, spans) = strip_all(&format!("STATICCALL ISZERO {REV} JUMPI"));
-        assert!(spans.is_empty(), "check with STATICCALL was wrongly stripped");
+        assert!(
+            spans.is_empty(),
+            "check with STATICCALL was wrongly stripped"
+        );
         assert!(flat.contains(&"STATICCALL".to_string()));
     }
 
@@ -333,7 +370,10 @@ mod tests {
     fn normal_jumpi_untouched() {
         // A normal conditional jump (not to revert) is left alone.
         let (flat, spans) = strip_all("DUP1 _sym_loop JUMPI");
-        assert!(spans.is_empty(), "a normal JUMPI (not revert) was wrongly touched");
+        assert!(
+            spans.is_empty(),
+            "a normal JUMPI (not revert) was wrongly touched"
+        );
         assert_eq!(flat, vec!["DUP1", "_sym_loop", "JUMPI"]);
     }
 
@@ -350,8 +390,16 @@ mod tests {
         );
         let p = parse_str(&src);
         let (_out, spans) = strip_guards(&p, &all_categories());
-        assert_eq!(spans.len(), 1, "overflow guard after a deploy-header RETURN was not stripped");
-        assert_eq!(spans[0].category, Category::Guard, "a stripped guard must carry the single Guard category");
+        assert_eq!(
+            spans.len(),
+            1,
+            "overflow guard after a deploy-header RETURN was not stripped"
+        );
+        assert_eq!(
+            spans[0].category,
+            Category::Guard,
+            "a stripped guard must carry the single Guard category"
+        );
     }
 
     #[test]
@@ -364,8 +412,15 @@ mod tests {
              {REV} JUMPDEST PUSH0 DUP1 REVERT"
         );
         let (flat, spans) = strip_all(&src);
-        assert_eq!(spans.len(), 2, "the orphaned revert block was not removed alongside its guard");
-        assert!(!flat.contains(&"REVERT".to_string()), "the dead revert body survived DCE");
+        assert_eq!(
+            spans.len(),
+            2,
+            "the orphaned revert block was not removed alongside its guard"
+        );
+        assert!(
+            !flat.contains(&"REVERT".to_string()),
+            "the dead revert body survived DCE"
+        );
         assert!(
             !flat.iter().any(|m| m.contains("revert")),
             "the orphaned revert label survived DCE"
@@ -385,7 +440,10 @@ mod tests {
             flat.iter().any(|m| m.contains("revert")),
             "a revert block still targeted by a live auth guard was wrongly deleted"
         );
-        assert!(flat.contains(&"REVERT".to_string()), "the live revert body was wrongly deleted");
+        assert!(
+            flat.contains(&"REVERT".to_string()),
+            "the live revert body was wrongly deleted"
+        );
     }
 
     #[test]
@@ -394,7 +452,10 @@ mod tests {
         let p = parse_str(&format!("DUP1 PUSH1 1 ADD PUSH1 100 LT {REV} JUMPI"));
         let none: HashSet<Category> = HashSet::new();
         let (out, spans) = strip_guards(&p, &none);
-        assert!(spans.is_empty(), "with the feature disabled the check must not be stripped");
+        assert!(
+            spans.is_empty(),
+            "with the feature disabled the check must not be stripped"
+        );
         assert_eq!(out.len(), p.len());
     }
 }

@@ -9,10 +9,10 @@ use clap::{CommandFactory, Parser};
 use tracing_subscriber::EnvFilter;
 
 use crate::config::FeatureConfig;
+use crate::core::Span;
 use crate::core::asm::render;
 use crate::core::bytecode::{assemble, bytes_to_hex};
-use crate::core::Span;
-use crate::features::{self, optimize};
+use crate::features::{self, optimize_with};
 use crate::input::{self, InputKind, Loaded};
 use crate::sidecar::{Backend, Lang};
 
@@ -29,7 +29,10 @@ FEATURES (all enabled by default):
     foldshift  — precompute a constant PUSH a PUSH b SHL/SHR into one push (always
                  safe; lowers gas, grows bytecode; symbolic input only)
     cmpnorm    — fold a SWAP1 before a comparison into the mirrored comparator
-                 (SWAP1 LT -> GT; always safe; symbolic input only)";
+                 (SWAP1 LT -> GT; always safe; symbolic input only)
+    inline     — relocate a small internal function into its call sites, removing
+                 the call/return indirection (size via --inline-max-body; symbolic
+                 input only)";
 
 /// Super-aggressive gas optimizer for EVM bytecode/assembly.
 #[derive(Parser, Debug)]
@@ -58,6 +61,10 @@ struct Cli {
     /// EVM version for compiler frontends (vyper/solc)
     #[arg(long = "evm-version", value_name = "v")]
     evm_version: Option<String>,
+
+    /// max internal-function body size (instructions) the inline pass relocates
+    #[arg(long = "inline-max-body", value_name = "n")]
+    inline_max_body: Option<usize>,
 
     /// show what would be stripped (this is the default)
     #[arg(long)]
@@ -122,14 +129,30 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
             fs::read_to_string(path).map_err(|e| format!("could not read config {path}: {e}"))?;
         config.apply_file(&content)?;
     }
-    for key in cli.disable.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+    for key in cli
+        .disable
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
         config.disable(key)?;
     }
-    for key in cli.enable.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+    for key in cli
+        .enable
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
         config.enable(key)?;
     }
+    if let Some(n) = cli.inline_max_body {
+        config.set_inline_max_body(n);
+    }
 
-    let input = cli.input.clone().ok_or("no input given (file path or '-')")?;
+    let input = cli
+        .input
+        .clone()
+        .ok_or("no input given (file path or '-')")?;
 
     // Creation-bytecode emission is a dedicated Vyper path: it drives the sidecar
     // (compile -> strip RUNTIME -> re-assemble via Vyper) rather than the generic
@@ -141,7 +164,7 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
     let loaded = input::load(&input, cli.input_kind, cli.evm_version.as_deref())?;
 
     let enabled = config.enabled_categories();
-    let (optimized, spans) = optimize(&loaded.instrs, &enabled);
+    let (optimized, spans) = optimize_with(&loaded.instrs, &enabled, config.inline_max_body());
 
     print_report(&loaded, &spans, &config, cli.emit_asm.is_some());
 
@@ -191,12 +214,7 @@ fn resolve_backend(input: &str, kind: InputKind) -> Result<Backend, String> {
 
 /// Emit optimized creation bytecode for a compiler source (Vyper/Solidity) via
 /// the shared sidecar backend.
-fn emit_creation(
-    input: &str,
-    out: &str,
-    cli: &Cli,
-    config: &FeatureConfig,
-) -> Result<i32, String> {
+fn emit_creation(input: &str, out: &str, cli: &Cli, config: &FeatureConfig) -> Result<i32, String> {
     let backend = resolve_backend(input, cli.input_kind)?;
 
     let evm = cli.evm_version.as_deref();
@@ -204,7 +222,7 @@ fn emit_creation(
     let dump = backend.dump(input, evm)?;
     // 2. Decide what to strip with the enabled categories.
     let enabled = config.enabled_categories();
-    let (_optimized, spans) = optimize(&dump.instrs, &enabled);
+    let (_optimized, spans) = optimize_with(&dump.instrs, &enabled, config.inline_max_body());
     // 3. Re-assemble creation bytecode with those guards removed/rewritten.
     let built = backend.build(input, &spans, evm)?;
 
@@ -230,8 +248,17 @@ fn print_span_summary(spans: &[Span], instrs: &[crate::core::Instr]) {
     }
     println!("\nsample stripped ranges:");
     for s in spans.iter().take(5) {
-        let seq: Vec<String> = instrs[s.start..=s.end].iter().map(|x| x.mnem().to_string()).collect();
-        println!("  [{}..{}] {} -> {}", s.start, s.end, s.category.key(), seq.join(" "));
+        let seq: Vec<String> = instrs[s.start..=s.end]
+            .iter()
+            .map(|x| x.mnem().to_string())
+            .collect();
+        println!(
+            "  [{}..{}] {} -> {}",
+            s.start,
+            s.end,
+            s.category.key(),
+            seq.join(" ")
+        );
     }
 }
 
@@ -249,7 +276,13 @@ fn print_category_counts(spans: &[Span]) {
 fn print_features() {
     println!("Available features (all enabled by default):\n");
     for f in features::registry() {
-        println!("  {:8} [{}]  {} — {}", f.key, f.category.key(), f.name, f.description);
+        println!(
+            "  {:8} [{}]  {} — {}",
+            f.key,
+            f.category.key(),
+            f.name,
+            f.description
+        );
     }
 }
 
@@ -262,7 +295,14 @@ fn print_report(loaded: &Loaded, spans: &[Span], config: &FeatureConfig, emittin
         .filter(|f| config.is_enabled(f.key))
         .map(|f| f.key)
         .collect();
-    println!("enabled features: {}", if on.is_empty() { "—".to_string() } else { on.join(", ") });
+    println!(
+        "enabled features: {}",
+        if on.is_empty() {
+            "—".to_string()
+        } else {
+            on.join(", ")
+        }
+    );
 
     println!("potential improvements: {}", spans.len());
     if spans.is_empty() {
@@ -285,8 +325,16 @@ mod tests {
     #[test]
     fn parse_basic_args() {
         let c = Cli::try_parse_from(["gasripper", "--disable", "guards,extra", "in.asm"]).unwrap();
-        assert_eq!(c.input.as_deref(), Some("in.asm"), "positional input was not captured");
-        assert_eq!(c.disable, vec!["guards", "extra"], "comma list was not split into features");
+        assert_eq!(
+            c.input.as_deref(),
+            Some("in.asm"),
+            "positional input was not captured"
+        );
+        assert_eq!(
+            c.disable,
+            vec!["guards", "extra"],
+            "comma list was not split into features"
+        );
     }
 
     #[test]
@@ -299,9 +347,20 @@ mod tests {
 
     #[test]
     fn repeated_disable_accumulates() {
-        let c = Cli::try_parse_from(["gasripper", "--disable", "guards", "--disable", "extra", "in.asm"])
-            .unwrap();
-        assert_eq!(c.disable, vec!["guards", "extra"], "repeated --disable flags did not accumulate");
+        let c = Cli::try_parse_from([
+            "gasripper",
+            "--disable",
+            "guards",
+            "--disable",
+            "extra",
+            "in.asm",
+        ])
+        .unwrap();
+        assert_eq!(
+            c.disable,
+            vec!["guards", "extra"],
+            "repeated --disable flags did not accumulate"
+        );
     }
 
     #[test]

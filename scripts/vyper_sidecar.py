@@ -95,22 +95,41 @@ def _runtime_instr(data):
 
 
 def _parse_edits(s):
-    """`start:end:op1,op2;...` -> [(start, end, [ops])]. Empty string -> []."""
+    """`start:end:op1,op2;...` -> [(start, end, [ops])]. Empty string -> []. The ops field may
+    itself contain `~` (inline body tokens) but never `:`/`,`/`;`, so it is split off as the
+    remainder after the second colon."""
     edits = []
     if not s.strip():
         return edits
     for part in s.split(";"):
-        a, b, ops = part.split(":")
+        a, b, ops = part.split(":", 2)
         edits.append((int(a), int(b), [o for o in ops.split(",") if o]))
     return edits
 
 
 def _edit_instr(op):
-    """A replacement op token as an instruction: `#<hex>` is a folded push literal (the
-    fold pass precomputed a constant shift); anything else is a bare opcode."""
+    """A replacement op token as an instruction. `#<hex>` is a folded push literal (the fold
+    pass precomputed a constant shift). A `<tag>~<rest>` token is a body instruction the inline
+    pass relocates verbatim: `P` push (`P~PUSH3~0x40`), `Y` pushsym, `M` pushmem, `L` label
+    (`L~sym`, or `L~` for a bare JUMPDEST), `R` raw byte. Anything else is a bare opcode."""
     if op.startswith("#"):
         h = op[1:]
         return ("push", ["PUSH%d" % (len(h) // 2), int(h, 16)])
+    if "~" in op:
+        tag, rest = op.split("~", 1)
+        if tag == "P":
+            if "~" in rest:
+                mnem, val = rest.split("~", 1)
+                return ("push", [mnem, int(val, 16)])
+            return ("push", [rest])
+        if tag == "Y":
+            return ("pushsym", [rest])
+        if tag == "M":
+            return ("pushmem", [rest])
+        if tag == "L":
+            return ("label", [rest, "JUMPDEST"]) if rest else ("label", ["JUMPDEST"])
+        if tag == "R":
+            return ("raw", [int(rest)])
     return ("op", [op])
 
 

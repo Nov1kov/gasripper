@@ -36,10 +36,9 @@ fn vyper_command() -> Command {
 
 /// Check that `vyper` is installed; return the version string.
 pub fn ensure_installed() -> Result<String, String> {
-    let out = vyper_command()
-        .arg("--version")
-        .output()
-        .map_err(|e| format!("vyper compiler not found in PATH ({e}); install `pip install vyper`"))?;
+    let out = vyper_command().arg("--version").output().map_err(|e| {
+        format!("vyper compiler not found in PATH ({e}); install `pip install vyper`")
+    })?;
     if !out.status.success() {
         return Err("`vyper --version` exited with an error".into());
     }
@@ -82,7 +81,11 @@ pub fn load(path: &str, evm_version: Option<&str>) -> Result<Loaded, String> {
         return Err("vyper returned empty assembly".into());
     }
     let symbolic = is_symbolic(&instrs);
-    Ok(Loaded { instrs, symbolic, kind: "vyper" })
+    Ok(Loaded {
+        instrs,
+        symbolic,
+        kind: "vyper",
+    })
 }
 
 /// Slice the RUNTIME body out of `vyper -f asm` output. The compiler wraps the
@@ -137,7 +140,10 @@ mod tests {
         let utf8 = cmd
             .get_envs()
             .any(|(k, v)| k == "PYTHONUTF8" && v == Some(OsStr::new("1")));
-        assert!(utf8, "vyper command is missing PYTHONUTF8=1: non-ASCII contracts fail on Windows");
+        assert!(
+            utf8,
+            "vyper command is missing PYTHONUTF8=1: non-ASCII contracts fail on Windows"
+        );
     }
 
     // The runtime slice must keep only the body inside `{ <RUNTIME ...> ... }`,
@@ -148,14 +154,21 @@ mod tests {
         let text = "_sym_subcode_size _mem_deploy_start CODECOPY RETURN \
                     { <RUNTIME _sym_runtime_begin mem @0 imms @0> \
                     PUSH0 CALLDATALOAD _sym___revert JUMPI }";
-        let body = extract_runtime(text).expect("the runtime body was not found in well-formed asm");
+        let body =
+            extract_runtime(text).expect("the runtime body was not found in well-formed asm");
         let body = body.trim();
         assert_eq!(
             body, "PUSH0 CALLDATALOAD _sym___revert JUMPI",
             "the runtime slice did not isolate the body (deploy preamble or header leaked in)"
         );
-        assert!(!body.contains("CODECOPY"), "deploy-preamble opcode leaked into the runtime slice");
-        assert!(!body.contains("RUNTIME"), "the <RUNTIME ...> header leaked into the runtime slice");
+        assert!(
+            !body.contains("CODECOPY"),
+            "deploy-preamble opcode leaked into the runtime slice"
+        );
+        assert!(
+            !body.contains("RUNTIME"),
+            "the <RUNTIME ...> header leaked into the runtime slice"
+        );
     }
 
     // Without the `<RUNTIME` marker the slice must report absence (None) so the

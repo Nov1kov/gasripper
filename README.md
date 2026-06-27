@@ -24,6 +24,13 @@ transformation that lowers gas. Six passes ship today:
 - **`cmpnorm`** — fold a `SWAP1` before a comparison into the mirrored comparator (`SWAP1 LT` → `GT`),
   e.g. venom's `(x * i) < (y * i)`. **Always safe** — swapping the operands and comparing equals the
   reversed comparator, needing no trusted caller.
+- **`inline`** — relocate a small Vyper `@internal` function (one venom keeps separate, i.e. with two
+  or more call sites) into its call sites, dropping the per-call indirection. A straight-line
+  tail-return body and a single-merge `if`/`else` diamond are both **de-threaded** (the return address
+  and the return `JUMP` eliminated, the body falling through to the continuation — the diamond also
+  drops venom's redundant branch-arm double jump); other branching bodies are relocated verbatim.
+  **Always safe** — a behavior-preserving relocation, needing no trusted caller. The first feature
+  with a numeric parameter (`--inline-max-body`, default 20).
 
 Fewer checks, cheaper stack juggling, and no wasted self-cancelling ops → less gas at execution time
 and smaller bytecode. The design leaves room for further gas-reducing passes.
@@ -96,6 +103,7 @@ fires only where its compiler leaves that specific class on the table.
 | `recompute` — recompute a cheap nullary opcode instead of `DUP`-ing it (`OP DUP1` → `OP OP`) | ✓ | ✓ | not needed (always safe) | [README](src/features/recompute/README.md) |
 | `foldshift` — precompute a constant `PUSH a PUSH b SHL/SHR` into one push | — | ✓ | not needed (always safe) | [README](src/features/fold_shift/README.md) |
 | `cmpnorm` — fold a `SWAP1` before a comparison into the mirrored comparator (`SWAP1 LT` → `GT`) | ✓ | — | not needed (always safe) | [README](src/features/cmpnorm/README.md) |
+| `inline` — relocate a small internal function (2+ call sites) into its call sites, removing the call indirection | ✓ | — | not needed (always safe) | [README](src/features/inline/README.md) |
 
 Each README (module docs + unit tests + a real-EVM e2e) is the template a new pass follows; see
 [DEVELOPMENT.md](DEVELOPMENT.md).

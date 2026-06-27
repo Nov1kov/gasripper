@@ -9,7 +9,9 @@
 //! floor that hides a single op's gas. Skips when Vyper is unavailable.
 
 use crate::core::Category;
-use crate::features::e2e_harness::{assert_preserved_and_smaller, encode_call, measure, write_temp};
+use crate::features::e2e_harness::{
+    assert_preserved_and_smaller, encode_call, measure, write_temp,
+};
 use crate::sidecar::{Backend, Lang};
 
 #[test]
@@ -21,7 +23,12 @@ fn vyper_double_not_cancelled_with_gas_win() {
     let src = "@external\ndef f(n: uint256) -> uint256:\n    s: uint256 = 0\n    for i: uint256 in range(n, bound=128):\n        s += ~(~i)\n    return s\n";
     let path = write_temp("s_vy_involution_loopnot.vy", src);
     let calldata = encode_call("f(uint256)", &[5]);
-    let r = match measure(&Backend::new(Lang::Vyper), &path, Category::Involution, calldata) {
+    let r = match measure(
+        &Backend::new(Lang::Vyper),
+        &path,
+        Category::Involution,
+        calldata,
+    ) {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!("SKIP vyper involution e2e (toolchain unavailable): {e}");

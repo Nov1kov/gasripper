@@ -27,7 +27,12 @@ contract C {
 fn solidity_foldshift() {
     let path = write_temp("gasripper_foldshift_e2e.sol", SOLIDITY_CONTRACT);
     let calldata = encode_call("transfer(address,uint256)", &[0xABCD, 0]);
-    let r = match measure(&Backend::new(Lang::Solidity), &path, Category::FoldShift, calldata) {
+    let r = match measure(
+        &Backend::new(Lang::Solidity),
+        &path,
+        Category::FoldShift,
+        calldata,
+    ) {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!("SKIP solidity foldshift e2e (toolchain unavailable): {e}");

@@ -8,6 +8,7 @@
 
 pub mod asm;
 pub mod bytecode;
+pub mod inline;
 pub mod opcodes;
 pub mod stack;
 pub mod strip;

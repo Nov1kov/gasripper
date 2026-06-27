@@ -125,8 +125,16 @@ mod tests {
         let p = parse_str("DUP2 DUP4 SWAP1 LT");
         let (out, spans) = normalize(&p);
         assert_eq!(spans.len(), 1, "a SWAP1 before LT was not folded into GT");
-        assert_eq!(spans[0].category, Category::CmpNorm, "the span must carry the CmpNorm category");
-        assert_eq!(mnemonics(&out), vec!["DUP2", "DUP4", "GT"], "SWAP1 LT was not rewritten to a single GT");
+        assert_eq!(
+            spans[0].category,
+            Category::CmpNorm,
+            "the span must carry the CmpNorm category"
+        );
+        assert_eq!(
+            mnemonics(&out),
+            vec!["DUP2", "DUP4", "GT"],
+            "SWAP1 LT was not rewritten to a single GT"
+        );
     }
 
     #[test]
@@ -135,16 +143,28 @@ mod tests {
         let p = parse_str("SWAP1 GT");
         let (out, spans) = normalize(&p);
         assert_eq!(spans.len(), 1, "a SWAP1 before GT was not folded into LT");
-        assert_eq!(mnemonics(&out), vec!["LT"], "SWAP1 GT was not rewritten to a single LT");
+        assert_eq!(
+            mnemonics(&out),
+            vec!["LT"],
+            "SWAP1 GT was not rewritten to a single LT"
+        );
     }
 
     #[test]
     fn swap1_signed_orders_flip() {
         // The signed strict orders mirror the same way.
         let (out_slt, _) = normalize(&parse_str("SWAP1 SLT"));
-        assert_eq!(mnemonics(&out_slt), vec!["SGT"], "SWAP1 SLT must fold to SGT");
+        assert_eq!(
+            mnemonics(&out_slt),
+            vec!["SGT"],
+            "SWAP1 SLT must fold to SGT"
+        );
         let (out_sgt, _) = normalize(&parse_str("SWAP1 SGT"));
-        assert_eq!(mnemonics(&out_sgt), vec!["SLT"], "SWAP1 SGT must fold to SLT");
+        assert_eq!(
+            mnemonics(&out_sgt),
+            vec!["SLT"],
+            "SWAP1 SGT must fold to SLT"
+        );
     }
 
     #[test]
@@ -153,8 +173,15 @@ mod tests {
         // change the result — it must be left alone (this idiom co-occurs in real output).
         let p = parse_str("SWAP2 LT");
         let (out, spans) = normalize(&p);
-        assert!(spans.is_empty(), "SWAP2 before a comparison was wrongly folded");
-        assert_eq!(mnemonics(&out), vec!["SWAP2", "LT"], "a non-foldable window was altered");
+        assert!(
+            spans.is_empty(),
+            "SWAP2 before a comparison was wrongly folded"
+        );
+        assert_eq!(
+            mnemonics(&out),
+            vec!["SWAP2", "LT"],
+            "a non-foldable window was altered"
+        );
     }
 
     #[test]
@@ -163,7 +190,10 @@ mod tests {
         // does not handle it (an inert rule would be noise).
         let p = parse_str("SWAP1 EQ");
         let (_out, spans) = normalize(&p);
-        assert!(spans.is_empty(), "SWAP1 EQ was folded though equality needs no normalization");
+        assert!(
+            spans.is_empty(),
+            "SWAP1 EQ was folded though equality needs no normalization"
+        );
     }
 
     #[test]
@@ -171,7 +201,10 @@ mod tests {
         // SWAP1 before a non-comparison op is real stack work — must not be touched.
         let p = parse_str("SWAP1 ADD");
         let (_out, spans) = normalize(&p);
-        assert!(spans.is_empty(), "a SWAP1 before a non-comparison op was wrongly folded");
+        assert!(
+            spans.is_empty(),
+            "a SWAP1 before a non-comparison op was wrongly folded"
+        );
     }
 
     #[test]
@@ -180,7 +213,10 @@ mod tests {
         // not guaranteed to run before the LT — the window must not be folded.
         let p = parse_str("SWAP1 _sym_x JUMPDEST LT");
         let spans = scan(&p);
-        assert!(spans.is_empty(), "a SWAP1/LT split by a label was wrongly folded");
+        assert!(
+            spans.is_empty(),
+            "a SWAP1/LT split by a label was wrongly folded"
+        );
     }
 
     #[test]
@@ -188,6 +224,9 @@ mod tests {
         // A comparison with no preceding SWAP1 is already in normal form.
         let p = parse_str("DUP2 DUP4 LT");
         let (_out, spans) = normalize(&p);
-        assert!(spans.is_empty(), "a comparison without a preceding SWAP1 was wrongly rewritten");
+        assert!(
+            spans.is_empty(),
+            "a comparison without a preceding SWAP1 was wrongly rewritten"
+        );
     }
 }

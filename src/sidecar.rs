@@ -111,7 +111,13 @@ impl Backend {
         }
     }
 
-    fn run(&self, subcmd: &str, source: &str, evm_version: Option<&str>, extra: &[&str]) -> Result<String, String> {
+    fn run(
+        &self,
+        subcmd: &str,
+        source: &str,
+        evm_version: Option<&str>,
+        extra: &[&str],
+    ) -> Result<String, String> {
         let interp = self.interpreter();
         let mut cmd = Command::new(&interp);
         cmd.arg(self.script()).arg(subcmd).arg(source);
@@ -142,19 +148,24 @@ impl Backend {
             if let Some(rest) = line.strip_prefix("REF ") {
                 reference_hex = Some(rest.trim().to_string());
             } else if let Some(rest) = line.strip_prefix("INSTR ") {
-                let mut it = rest.splitn(3, ' ');
-                let kind = it.next().unwrap_or("");
-                let mnem = it.next().unwrap_or("").trim();
-                let value = it.next().map(|v| v.trim()).filter(|v| !v.is_empty());
-                instrs.push(descriptor_to_instr(kind, mnem, value)?);
+                let (kind, payload) = rest.split_once(' ').unwrap_or((rest, ""));
+                instrs.push(descriptor_to_instr(kind, payload.trim())?);
             }
         }
         let reference_hex = reference_hex.ok_or("sidecar dump: missing REF line")?;
-        Ok(Dump { instrs, reference_hex })
+        Ok(Dump {
+            instrs,
+            reference_hex,
+        })
     }
 
     /// Recompile `source`, apply the strip edits to the RUNTIME, and assemble.
-    pub fn build(&self, source: &str, spans: &[crate::core::Span], evm_version: Option<&str>) -> Result<Build, String> {
+    pub fn build(
+        &self,
+        source: &str,
+        spans: &[crate::core::Span],
+        evm_version: Option<&str>,
+    ) -> Result<Build, String> {
         let edits = serialize_edits(spans);
         let stdout = self.run("build", source, evm_version, &["--edit", &edits])?;
         let mut creation_hex = None;
@@ -181,29 +192,32 @@ impl Backend {
     }
 }
 
-/// Map a `kind mnem [value]` descriptor to an [`Instr`]. The strip engine reasons over
-/// stack arity and mnemonics, so most immediates are irrelevant and carry placeholders.
-/// A concrete literal push carries its real `value` (a `0x..` immediate) — the fold pass
-/// needs it to precompute a constant shift; a value-less push is symbolic/linker-resolved
-/// and stays a non-literal (so it is never folded). Shared by every language backend.
-fn descriptor_to_instr(kind: &str, mnem: &str, value: Option<&str>) -> Result<Instr, String> {
+/// Map a `kind payload` descriptor line to an [`Instr`]. `payload` is everything after the
+/// kind: for `push` it is `PUSHn [0xVALUE]`; for every other kind it is the full mnemonic or
+/// symbol. A Vyper internal-function label is a single asm token that nonetheless spans several
+/// space-separated words (`_sym_internal 0 name_runtime`), so the payload is kept WHOLE rather
+/// than truncated at the first space — the inline pass matches a call site to its function by
+/// this full symbol. The strip engine reasons over arity and mnemonics, so a value-less push
+/// stays a non-literal (never folded); a concrete literal push carries its `0x..` immediate so
+/// the fold pass can precompute a constant shift. Shared by every language backend.
+fn descriptor_to_instr(kind: &str, payload: &str) -> Result<Instr, String> {
     let i = match kind {
-        "op" => Instr::new(Kind::Op, vec![mnem.into()]),
-        "push" => match value {
-            Some(v) => Instr::new(Kind::Push, vec![mnem.into(), v.into()]),
-            None => Instr::new(Kind::Push, vec![mnem.into()]),
+        "op" => Instr::new(Kind::Op, vec![payload.into()]),
+        "push" => match payload.split_once(' ') {
+            Some((mnem, value)) => Instr::new(Kind::Push, vec![mnem.into(), value.trim().into()]),
+            None => Instr::new(Kind::Push, vec![payload.into()]),
         },
-        "pushsym" => Instr::new(Kind::PushSym, vec![mnem.into()]),
-        "pushmem" => Instr::new(Kind::PushMem, vec![mnem.into()]),
-        "ofst" => Instr::new(Kind::Ofst, vec![mnem.into(), "0".into(), "0".into()]),
+        "pushsym" => Instr::new(Kind::PushSym, vec![payload.into()]),
+        "pushmem" => Instr::new(Kind::PushMem, vec![payload.into()]),
+        "ofst" => Instr::new(Kind::Ofst, vec![payload.into(), "0".into(), "0".into()]),
         "label" => {
-            if mnem == "JUMPDEST" {
+            if payload == "JUMPDEST" {
                 Instr::new(Kind::Label, vec!["JUMPDEST".into()])
             } else {
-                Instr::new(Kind::Label, vec![mnem.into(), "JUMPDEST".into()])
+                Instr::new(Kind::Label, vec![payload.into(), "JUMPDEST".into()])
             }
         }
-        "raw" => Instr::new(Kind::Raw, vec![mnem.into()]),
+        "raw" => Instr::new(Kind::Raw, vec![payload.into()]),
         other => return Err(format!("unknown instruction descriptor kind: {other}")),
     };
     Ok(i)

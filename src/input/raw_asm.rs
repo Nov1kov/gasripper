@@ -16,5 +16,9 @@ pub fn load(content: &str) -> Result<Loaded, String> {
         return Err("empty assembly".into());
     }
     let symbolic = is_symbolic(&instrs);
-    Ok(Loaded { instrs, symbolic, kind: "asm" })
+    Ok(Loaded {
+        instrs,
+        symbolic,
+        kind: "asm",
+    })
 }

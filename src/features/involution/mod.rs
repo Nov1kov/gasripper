@@ -72,8 +72,17 @@ pub fn scan(instrs: &[Instr]) -> Vec<Span> {
             i += 1;
         }
         if i - start >= 2 {
-            let replacement = if (i - start) % 2 == 0 { Vec::new() } else { vec![NOT.to_string()] };
-            out.push(Span { start, end: i - 1, category: Category::Involution, replacement });
+            let replacement = if (i - start) % 2 == 0 {
+                Vec::new()
+            } else {
+                vec![NOT.to_string()]
+            };
+            out.push(Span {
+                start,
+                end: i - 1,
+                category: Category::Involution,
+                replacement,
+            });
         }
     }
     out
@@ -98,7 +107,11 @@ mod tests {
         let p = parse_str("NOT NOT");
         let (out, spans) = eliminate(&p);
         assert_eq!(spans.len(), 1, "an adjacent NOT pair was not cancelled");
-        assert!(mnemonics(&out).is_empty(), "the cancelling NOT pair was not deleted: {:?}", mnemonics(&out));
+        assert!(
+            mnemonics(&out).is_empty(),
+            "the cancelling NOT pair was not deleted: {:?}",
+            mnemonics(&out)
+        );
     }
 
     #[test]
@@ -107,7 +120,11 @@ mod tests {
         let p = parse_str("NOT NOT NOT");
         let (out, spans) = eliminate(&p);
         assert_eq!(spans.len(), 1, "a triple-NOT run was not collapsed");
-        assert_eq!(mnemonics(&out), vec!["NOT"], "an odd NOT run must collapse to a single NOT");
+        assert_eq!(
+            mnemonics(&out),
+            vec!["NOT"],
+            "an odd NOT run must collapse to a single NOT"
+        );
     }
 
     #[test]
@@ -115,7 +132,11 @@ mod tests {
         // Four complements cancel completely.
         let p = parse_str("NOT NOT NOT NOT");
         let (out, _spans) = eliminate(&p);
-        assert!(mnemonics(&out).is_empty(), "an even NOT run was not fully cancelled: {:?}", mnemonics(&out));
+        assert!(
+            mnemonics(&out).is_empty(),
+            "an even NOT run was not fully cancelled: {:?}",
+            mnemonics(&out)
+        );
     }
 
     #[test]
@@ -131,8 +152,15 @@ mod tests {
         // An op between the NOTs splits the run; neither lone NOT is cancellable.
         let p = parse_str("NOT ADD NOT");
         let (out, spans) = eliminate(&p);
-        assert!(spans.is_empty(), "a NOT run was wrongly grown across a non-NOT op");
-        assert_eq!(mnemonics(&out), vec!["NOT", "ADD", "NOT"], "live code around the NOTs was altered");
+        assert!(
+            spans.is_empty(),
+            "a NOT run was wrongly grown across a non-NOT op"
+        );
+        assert_eq!(
+            mnemonics(&out),
+            vec!["NOT", "ADD", "NOT"],
+            "live code around the NOTs was altered"
+        );
     }
 
     #[test]

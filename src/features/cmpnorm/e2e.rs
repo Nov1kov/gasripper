@@ -18,7 +18,12 @@ fn vyper_swap1_lt_folded_with_gas_win() {
     let src = "@external\n@view\ndef f(x: uint256, y: uint256, n: uint256) -> uint256:\n    s: uint256 = 0\n    for i: uint256 in range(n, bound=128):\n        if (x * i) < (y * i):\n            s += 1\n    return s\n";
     let path = write_temp("s_vy_cmpnorm_lt.vy", src);
     let calldata = encode_call("f(uint256,uint256,uint256)", &[2, 3, 5]);
-    let r = match measure(&Backend::new(Lang::Vyper), &path, Category::CmpNorm, calldata) {
+    let r = match measure(
+        &Backend::new(Lang::Vyper),
+        &path,
+        Category::CmpNorm,
+        calldata,
+    ) {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!("SKIP vyper cmpnorm e2e (toolchain unavailable): {e}");

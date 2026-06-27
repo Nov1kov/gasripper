@@ -69,9 +69,22 @@ const DUP1: &str = "DUP1";
 /// and leaves the identical stack. `PUSH0` is the constant `0`; the rest read fixed
 /// transaction/block environment. See the module doc for what is deliberately excluded.
 const RECOMPUTABLE: &[&str] = &[
-    "PUSH0", "ADDRESS", "ORIGIN", "CALLER", "CALLVALUE", "CALLDATASIZE", "CODESIZE",
-    "GASPRICE", "COINBASE", "TIMESTAMP", "NUMBER", "PREVRANDAO", "GASLIMIT", "CHAINID",
-    "BASEFEE", "BLOBBASEFEE",
+    "PUSH0",
+    "ADDRESS",
+    "ORIGIN",
+    "CALLER",
+    "CALLVALUE",
+    "CALLDATASIZE",
+    "CODESIZE",
+    "GASPRICE",
+    "COINBASE",
+    "TIMESTAMP",
+    "NUMBER",
+    "PREVRANDAO",
+    "GASLIMIT",
+    "CHAINID",
+    "BASEFEE",
+    "BLOBBASEFEE",
 ];
 
 /// `ins` is a cheap result-invariant nullary opcode this pass can recompute.
@@ -102,7 +115,12 @@ pub fn scan(instrs: &[Instr]) -> Vec<Span> {
         let op = instrs[i].mnem().to_string();
         let mut j = i + 1;
         while j < n && is_dup1(&instrs[j]) {
-            out.push(Span { start: j, end: j, category: Category::Recompute, replacement: vec![op.clone()] });
+            out.push(Span {
+                start: j,
+                end: j,
+                category: Category::Recompute,
+                replacement: vec![op.clone()],
+            });
             j += 1;
         }
         i = j.max(i + 1);
@@ -130,8 +148,16 @@ mod tests {
         let p = parse_str("ADDRESS DUP1 ADD");
         let (out, spans) = eliminate(&p);
         assert_eq!(spans.len(), 1, "ADDRESS DUP1 was not recomputed");
-        assert_eq!(spans[0].category, Category::Recompute, "the span must carry the Recompute category");
-        assert_eq!(mnemonics(&out), vec!["ADDRESS", "ADDRESS", "ADD"], "DUP1 was not rewritten to a second ADDRESS");
+        assert_eq!(
+            spans[0].category,
+            Category::Recompute,
+            "the span must carry the Recompute category"
+        );
+        assert_eq!(
+            mnemonics(&out),
+            vec!["ADDRESS", "ADDRESS", "ADD"],
+            "DUP1 was not rewritten to a second ADDRESS"
+        );
     }
 
     #[test]
@@ -140,7 +166,11 @@ mod tests {
         let p = parse_str("PUSH0 DUP1 REVERT");
         let (out, spans) = eliminate(&p);
         assert_eq!(spans.len(), 1, "PUSH0 DUP1 was not recomputed");
-        assert_eq!(mnemonics(&out), vec!["PUSH0", "PUSH0", "REVERT"], "DUP1 of PUSH0 was not rewritten to PUSH0");
+        assert_eq!(
+            mnemonics(&out),
+            vec!["PUSH0", "PUSH0", "REVERT"],
+            "DUP1 of PUSH0 was not rewritten to PUSH0"
+        );
     }
 
     #[test]
@@ -148,8 +178,16 @@ mod tests {
         // A maximal DUP1 run after the opcode all duplicate the same invariant word.
         let p = parse_str("CALLER DUP1 DUP1");
         let (out, spans) = eliminate(&p);
-        assert_eq!(spans.len(), 2, "a DUP1 run after a recomputable op was not fully rewritten");
-        assert_eq!(mnemonics(&out), vec!["CALLER", "CALLER", "CALLER"], "the DUP1 run was not all recomputed");
+        assert_eq!(
+            spans.len(),
+            2,
+            "a DUP1 run after a recomputable op was not fully rewritten"
+        );
+        assert_eq!(
+            mnemonics(&out),
+            vec!["CALLER", "CALLER", "CALLER"],
+            "the DUP1 run was not all recomputed"
+        );
     }
 
     #[test]
@@ -157,7 +195,10 @@ mod tests {
         // DUP2 duplicates a deeper slot, not the opcode's value — must not be rewritten.
         let p = parse_str("ADDRESS DUP2");
         let (_out, spans) = eliminate(&p);
-        assert!(spans.is_empty(), "DUP2 (a deeper slot) was wrongly recomputed as the opcode");
+        assert!(
+            spans.is_empty(),
+            "DUP2 (a deeper slot) was wrongly recomputed as the opcode"
+        );
     }
 
     #[test]
@@ -165,7 +206,10 @@ mod tests {
         // GAS changes every opcode, so GAS DUP1 != GAS GAS — must never be recomputed.
         let p = parse_str("GAS DUP1");
         let (_out, spans) = eliminate(&p);
-        assert!(spans.is_empty(), "a non-invariant op (GAS) was wrongly recomputed");
+        assert!(
+            spans.is_empty(),
+            "a non-invariant op (GAS) was wrongly recomputed"
+        );
     }
 
     #[test]
@@ -173,6 +217,9 @@ mod tests {
         // A DUP1 not preceded by a recomputable op duplicates an arbitrary value — keep it.
         let p = parse_str("CALLDATALOAD DUP1");
         let (_out, spans) = eliminate(&p);
-        assert!(spans.is_empty(), "a DUP1 of a non-recomputable value was wrongly rewritten");
+        assert!(
+            spans.is_empty(),
+            "a DUP1 of a non-recomputable value was wrongly rewritten"
+        );
     }
 }

@@ -22,7 +22,12 @@ fn vyper_chainid_dup1_recomputed_with_gas_win() {
     let src = "@external\n@view\ndef f(n: uint256) -> uint256:\n    s: uint256 = 0\n    for i: uint256 in range(n, bound=128):\n        s += chain.id * chain.id\n    return s\n";
     let path = write_temp("s_vy_recompute_chainid.vy", src);
     let calldata = encode_call("f(uint256)", &[5]);
-    let r = match measure(&Backend::new(Lang::Vyper), &path, Category::Recompute, calldata) {
+    let r = match measure(
+        &Backend::new(Lang::Vyper),
+        &path,
+        Category::Recompute,
+        calldata,
+    ) {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!("SKIP vyper recompute e2e (toolchain unavailable): {e}");
@@ -43,7 +48,12 @@ fn solidity_callvalue_dup1_recomputed_with_gas_win() {
     let src = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.20;\ncontract C {\n    function f(uint256 n) external pure returns (uint256 s) {\n        for (uint256 i = 0; i < n; i++) { s += i; }\n    }\n}\n";
     let path = write_temp("s_sol_recompute_callvalue.sol", src);
     let calldata = encode_call("f(uint256)", &[5]);
-    let r = match measure(&Backend::new(Lang::Solidity), &path, Category::Recompute, calldata) {
+    let r = match measure(
+        &Backend::new(Lang::Solidity),
+        &path,
+        Category::Recompute,
+        calldata,
+    ) {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!("SKIP solidity recompute e2e (toolchain unavailable): {e}");

@@ -7,7 +7,9 @@
 //! auth wrapper — the reschedule is always safe. Skips when Vyper is unavailable.
 
 use crate::core::Category;
-use crate::features::e2e_harness::{assert_preserved_and_smaller, encode_call, measure, write_temp};
+use crate::features::e2e_harness::{
+    assert_preserved_and_smaller, encode_call, measure, write_temp,
+};
 use crate::sidecar::{Backend, Lang};
 
 #[test]
@@ -19,7 +21,12 @@ fn vyper_shuffle_reschedules_with_gas_win() {
     let src = "@external\ndef foo(n: uint256) -> uint256:\n    s: uint256 = 0\n    for i: uint256 in range(n, bound=128):\n        s += i * i\n    return s\n";
     let path = write_temp("s_vy_shuffle_loop.vy", src);
     let calldata = encode_call("foo(uint256)", &[5]);
-    let r = match measure(&Backend::new(Lang::Vyper), &path, Category::Shuffle, calldata) {
+    let r = match measure(
+        &Backend::new(Lang::Vyper),
+        &path,
+        Category::Shuffle,
+        calldata,
+    ) {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!("SKIP vyper shuffle e2e (toolchain unavailable): {e}");
