@@ -243,24 +243,25 @@ pub fn assert_rejects_stranger(creation: &str, calldata: Vec<u8>) {
     );
 }
 
-/// Compile `source_path`, strip only `only`, re-assemble baseline and optimized
-/// creation bytecode, and run both on revm with `calldata`.
+/// Compile `source_path`, run the passes for `categories`, re-assemble baseline and
+/// optimized creation bytecode, and run both on revm with `calldata`. The baseline is
+/// always the unoptimized compiler reference; `categories` selects which passes shape the
+/// optimized build, so a caller can measure the cumulative effect of enabling more passes.
 ///
 /// Returns `Err` when the toolchain is unavailable (the test should SKIP) or when
 /// the baseline invariant fails; panics on an actual EVM execution failure.
-pub fn measure(
+pub fn measure_set(
     backend: &Backend,
     source_path: &str,
-    only: Category,
+    categories: &HashSet<Category>,
     calldata: Vec<u8>,
 ) -> Result<Report, String> {
     init_tracing();
     // 1. Compile + read runtime instructions (Err -> caller skips).
     let dump = backend.dump(source_path, None)?;
 
-    // 2. Run only the requested category's pass.
-    let set: HashSet<Category> = [only].into_iter().collect();
-    let (_optimized, spans) = optimize(&dump.instrs, &set);
+    // 2. Run the requested categories' passes.
+    let (_optimized, spans) = optimize(&dump.instrs, categories);
 
     // 3. Re-assemble baseline and optimized creation bytecode.
     let base = backend.build(source_path, &[], None)?;
@@ -284,4 +285,16 @@ pub fn measure(
         bytes_after: opt.bytes_after,
         creation_opt: opt.creation_hex,
     })
+}
+
+/// Compile `source_path`, strip only `only`, re-assemble baseline and optimized creation
+/// bytecode, and run both on revm with `calldata`. A single-category convenience over
+/// [`measure_set`].
+pub fn measure(
+    backend: &Backend,
+    source_path: &str,
+    only: Category,
+    calldata: Vec<u8>,
+) -> Result<Report, String> {
+    measure_set(backend, source_path, &[only].into_iter().collect(), calldata)
 }

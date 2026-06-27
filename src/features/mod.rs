@@ -22,6 +22,8 @@ use crate::core::{Category, Instr, Span, apply_spans, strip_guards};
 
 #[cfg(test)]
 pub mod e2e_harness;
+#[cfg(test)]
+mod progressive_e2e;
 pub mod cmpnorm;
 pub mod fold_shift;
 pub mod guards;

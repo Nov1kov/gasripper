@@ -204,13 +204,17 @@ def _apply_edits(code, edits, blocks):
             drop.update(blocks[end])
     out, i, n = [], 0, len(code)
     while i < n:
+        # A dropped index belongs to a dead revert block being deleted; that wins over any
+        # replacement another pass placed inside it (e.g. foldshift folding the Panic-selector
+        # `PUSH sel PUSH 0xe0 SHL` in an inverse guard's inline revert). Skip the whole
+        # replacement so no folded push is stranded in deleted code.
+        if i in drop:
+            i = repl[i][0] + 1 if i in repl else i + 1
+            continue
         if i in repl:
             end, ops = repl[i]
             out.extend(_edit_item(op) for op in ops)
             i = end + 1
-            continue
-        if i in drop:
-            i += 1
             continue
         out.append(code[i])
         i += 1
