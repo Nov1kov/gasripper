@@ -36,6 +36,8 @@ pub enum Category {
     Recompute,
     /// A constant `PUSH a PUSH b SHL/SHR` precomputed to a single push of the result.
     FoldShift,
+    /// A `SWAP1` before a comparison folded into the mirrored comparator (`SWAP1 LT` -> `GT`).
+    CmpNorm,
 }
 
 impl Category {
@@ -48,6 +50,7 @@ impl Category {
             Category::Involution => "involution",
             Category::Recompute => "recompute",
             Category::FoldShift => "foldshift",
+            Category::CmpNorm => "cmpnorm",
         }
     }
 }

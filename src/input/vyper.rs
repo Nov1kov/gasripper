@@ -1,8 +1,11 @@
 //! Frontend: Vyper contract (`.vy`).
 //!
 //! Requires the `vyper` compiler installed in PATH (checked before compiling).
-//! The contract is compiled to assembly (`vyper -f asm`), then the text is
-//! normalized and parsed by our parser.
+//! The contract is compiled to assembly (`vyper -f asm`); only the RUNTIME body
+//! is taken (the deploy preamble and the `<RUNTIME ...>` header are dropped),
+//! then normalized and parsed by our parser. Reporting over runtime only matches
+//! the sidecar dump that `--emit-creation` strips — the constructor is never
+//! gasripper's to touch.
 //!
 //! Status: EXPERIMENTAL. The exact format of `-f asm` depends on the Vyper
 //! version; the `strip` engine targets the symbolic labels `_sym_*revert*` of the
@@ -72,13 +75,44 @@ pub fn load(path: &str, evm_version: Option<&str>) -> Result<Loaded, String> {
         ));
     }
     let asm_text = String::from_utf8_lossy(&out.stdout);
-    let toks = tokenize_vyper_asm(&asm_text);
+    let runtime = extract_runtime(&asm_text).unwrap_or(asm_text.as_ref());
+    let toks = tokenize_vyper_asm(runtime);
     let instrs = parse_tokens(&toks);
     if instrs.is_empty() {
         return Err("vyper returned empty assembly".into());
     }
     let symbolic = is_symbolic(&instrs);
     Ok(Loaded { instrs, symbolic, kind: "vyper" })
+}
+
+/// Slice the RUNTIME body out of `vyper -f asm` output. The compiler wraps the
+/// program as `<deploy preamble> { <RUNTIME ...> <body> }`; only `<body>` is the
+/// code gasripper optimizes (the constructor is assembled untouched), so the
+/// report and the strip must see runtime instructions only — the same view the
+/// sidecar dump gives `--emit-creation`, so their indices line up. Returns `None`
+/// when no `<RUNTIME` marker is present (an older/unexpected asm format), letting
+/// the caller fall back to the whole text.
+fn extract_runtime(text: &str) -> Option<&str> {
+    let run = text.find("<RUNTIME")?;
+    let open = text[..run].rfind('{')?;
+    let mut depth = 0i32;
+    let mut close = None;
+    for (off, ch) in text[open..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(open + off);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let inner = &text[open + 1..close?];
+    let gt = inner.find('>')?;
+    Some(&inner[gt + 1..])
 }
 
 /// Normalize `vyper -f asm` output: drop brackets/commas, keep tokens.
@@ -92,7 +126,7 @@ fn tokenize_vyper_asm(text: &str) -> Vec<&str> {
 mod tests {
     use std::ffi::OsStr;
 
-    use super::compile_command;
+    use super::{compile_command, extract_runtime};
 
     // The vyper command must force Python UTF-8 mode; without it vyper opens the
     // source with the Windows locale codec (cp1252) and a non-ASCII byte such as
@@ -104,5 +138,34 @@ mod tests {
             .get_envs()
             .any(|(k, v)| k == "PYTHONUTF8" && v == Some(OsStr::new("1")));
         assert!(utf8, "vyper command is missing PYTHONUTF8=1: non-ASCII contracts fail on Windows");
+    }
+
+    // The runtime slice must keep only the body inside `{ <RUNTIME ...> ... }`,
+    // dropping the deploy preamble and the header — otherwise the report counts
+    // and indexes constructor instructions gasripper never strips.
+    #[test]
+    fn extract_runtime_keeps_only_body() {
+        let text = "_sym_subcode_size _mem_deploy_start CODECOPY RETURN \
+                    { <RUNTIME _sym_runtime_begin mem @0 imms @0> \
+                    PUSH0 CALLDATALOAD _sym___revert JUMPI }";
+        let body = extract_runtime(text).expect("the runtime body was not found in well-formed asm");
+        let body = body.trim();
+        assert_eq!(
+            body, "PUSH0 CALLDATALOAD _sym___revert JUMPI",
+            "the runtime slice did not isolate the body (deploy preamble or header leaked in)"
+        );
+        assert!(!body.contains("CODECOPY"), "deploy-preamble opcode leaked into the runtime slice");
+        assert!(!body.contains("RUNTIME"), "the <RUNTIME ...> header leaked into the runtime slice");
+    }
+
+    // Without the `<RUNTIME` marker the slice must report absence (None) so the
+    // caller falls back to the whole text instead of dropping everything.
+    #[test]
+    fn extract_runtime_absent_without_marker() {
+        let text = "PUSH0 CALLDATALOAD _sym___revert JUMPI";
+        assert!(
+            extract_runtime(text).is_none(),
+            "a missing runtime marker was not reported, so the fallback would be skipped"
+        );
     }
 }

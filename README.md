@@ -6,7 +6,7 @@
 
 A Rust CLI tool that maximally optimizes an EVM contract for gas. The goal is to **not change
 execution logic** while shedding everything not needed for a bare run, using any provably-safe
-transformation that lowers gas. Five passes ship today:
+transformation that lowers gas. Six passes ship today:
 
 - **`guards`** — remove redundant revert guards (overflow/underflow, ABI/calldata bounds, range/cast
   asserts). Aggressive: safe **only** under a trusted caller (see the disclaimer).
@@ -21,6 +21,9 @@ transformation that lowers gas. Five passes ship today:
 - **`foldshift`** — precompute a constant `PUSH a PUSH b SHL/SHR` (e.g. solc's `1 << 160` address
   mask) into a single push. **Always safe** — a self-contained constant. Trades bytecode size for
   per-call gas, the opposite of what the compiler optimizes for.
+- **`cmpnorm`** — fold a `SWAP1` before a comparison into the mirrored comparator (`SWAP1 LT` → `GT`),
+  e.g. venom's `(x * i) < (y * i)`. **Always safe** — swapping the operands and comparing equals the
+  reversed comparator, needing no trusted caller.
 
 Fewer checks, cheaper stack juggling, and no wasted self-cancelling ops → less gas at execution time
 and smaller bytecode. The design leaves room for further gas-reducing passes.
@@ -92,6 +95,7 @@ fires only where its compiler leaves that specific class on the table.
 | `involution` — cancel runs of an involutive op (`NOT NOT` → nothing) | ✓ | — | not needed (always safe) | [README](src/features/involution/README.md) |
 | `recompute` — recompute a cheap nullary opcode instead of `DUP`-ing it (`OP DUP1` → `OP OP`) | ✓ | ✓ | not needed (always safe) | [README](src/features/recompute/README.md) |
 | `foldshift` — precompute a constant `PUSH a PUSH b SHL/SHR` into one push | — | ✓ | not needed (always safe) | [README](src/features/fold_shift/README.md) |
+| `cmpnorm` — fold a `SWAP1` before a comparison into the mirrored comparator (`SWAP1 LT` → `GT`) | ✓ | — | not needed (always safe) | [README](src/features/cmpnorm/README.md) |
 
 Each README (module docs + unit tests + a real-EVM e2e) is the template a new pass follows; see
 [DEVELOPMENT.md](DEVELOPMENT.md).
@@ -125,7 +129,7 @@ features enabled), passing just the input path is enough.
 |---|---|---|
 | Raw assembly | `.asm` / `.evm` | parsed directly (including symbolic venom: `_sym_*`, `_OFST`, `_mem_`) |
 | Raw bytecode | `.hex` / `.bin` | disassembled |
-| Vyper contract | `.vy` | compiled with `vyper -f asm` (needs `vyper` in PATH, or set `GASRIPPER_VYPER_PYTHON`) — **experimental** |
+| Vyper contract | `.vy` | compiled with `vyper -f asm`, runtime body only — the deploy preamble is excluded (needs `vyper` in PATH, or set `GASRIPPER_VYPER_PYTHON`) — **experimental** |
 | Solidity contract | `.sol` | compiled with `solc --bin-runtime` (needs `solc` in PATH) — **experimental** |
 
 The type is detected by extension; it can be set explicitly with

@@ -27,7 +27,9 @@ FEATURES (all enabled by default):
     recompute  — recompute a cheap nullary opcode instead of DUP-ing it (OP DUP1 ->
                  OP OP; always safe; any input)
     foldshift  — precompute a constant PUSH a PUSH b SHL/SHR into one push (always
-                 safe; lowers gas, grows bytecode; symbolic input only)";
+                 safe; lowers gas, grows bytecode; symbolic input only)
+    cmpnorm    — fold a SWAP1 before a comparison into the mirrored comparator
+                 (SWAP1 LT -> GT; always safe; symbolic input only)";
 
 /// Super-aggressive gas optimizer for EVM bytecode/assembly.
 #[derive(Parser, Debug)]
@@ -233,6 +235,17 @@ fn print_span_summary(spans: &[Span], instrs: &[crate::core::Instr]) {
     }
 }
 
+/// Print how many potential improvements each enabled feature found (categories
+/// that found none are omitted). Registry order, so the breakdown is stable.
+fn print_category_counts(spans: &[Span]) {
+    for f in features::registry() {
+        let n = spans.iter().filter(|s| s.category == f.category).count();
+        if n > 0 {
+            println!("  {}: {}", f.category.key(), n);
+        }
+    }
+}
+
 fn print_features() {
     println!("Available features (all enabled by default):\n");
     for f in features::registry() {
@@ -251,20 +264,11 @@ fn print_report(loaded: &Loaded, spans: &[Span], config: &FeatureConfig, emittin
         .collect();
     println!("enabled features: {}", if on.is_empty() { "—".to_string() } else { on.join(", ") });
 
-    println!("checks to strip: {}", spans.len());
+    println!("potential improvements: {}", spans.len());
     if spans.is_empty() {
         return;
     }
-
-    // Show the first few stripped ranges as mnemonics.
-    println!("\nsample stripped ranges:");
-    for s in spans.iter().take(5) {
-        let seq: Vec<String> = loaded.instrs[s.start..=s.end]
-            .iter()
-            .map(|x| x.mnem().to_string())
-            .collect();
-        println!("  [{}..{}] {} -> {}", s.start, s.end, s.category.key(), seq.join(" "));
-    }
+    print_category_counts(spans);
 
     if loaded.symbolic && !emitting_asm {
         println!(

@@ -108,9 +108,10 @@ mod tests {
         assert!(c.is_enabled("involution"), "the involution feature must default to enabled");
         assert!(c.is_enabled("recompute"), "the recompute feature must default to enabled");
         assert!(c.is_enabled("foldshift"), "the foldshift feature must default to enabled");
+        assert!(c.is_enabled("cmpnorm"), "the cmpnorm feature must default to enabled");
         assert_eq!(
             c.enabled_categories().len(),
-            5,
+            6,
             "every shipped category must be enabled by default"
         );
     }

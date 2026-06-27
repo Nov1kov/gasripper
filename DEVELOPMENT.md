@@ -102,13 +102,20 @@ to a single `PUSH21` literal drops a `transfer(address,uint256)` call (two maske
 26518 → 26506 gas (−12) while **growing** the creation bytecode 473 → 532 (+59) — the one pass that
 trades size for gas. It is solc-specific: Vyper's venom does not emit the idiom.
 
+The `cmpnorm` pass is proven on Vyper (`src/features/cmpnorm/e2e.rs`): venom 0.4.3 compares two
+freshly-computed subexpressions with `SWAP1 LT`; folding the per-iteration `(x * i) < (y * i)`
+comparison in a loop body to a single `GT` drops call gas 22783 → 22768 (−15 = 3 gas over 5 iterations)
+while shrinking the creation bytecode 203 → 202. It is Vyper-specific: solc selects operand order via
+`DUP` depth and never emits the idiom.
+
 ## Adding a feature
 
-A feature is one independent gas-reduction pass. Five ship today: `guards` (trusted-caller revert
+A feature is one independent gas-reduction pass. Six ship today: `guards` (trusted-caller revert
 removal, `src/features/guards/`), `shuffle` (always-safe stack rescheduling, `src/features/shuffle/`),
 `involution` (always-safe `NOT NOT` cancelling, `src/features/involution/`), `recompute`
-(always-safe `OP DUP1` → `OP OP` recompute, `src/features/recompute/`), and `foldshift` (always-safe
-constant `PUSH a PUSH b SHL/SHR` folding, `src/features/fold_shift/`) — each a reference
+(always-safe `OP DUP1` → `OP OP` recompute, `src/features/recompute/`), `foldshift` (always-safe
+constant `PUSH a PUSH b SHL/SHR` folding, `src/features/fold_shift/`), and `cmpnorm` (always-safe
+`SWAP1 LT` → `GT` comparison normalization, `src/features/cmpnorm/`) — each a reference
 module of `mod.rs` + `README.md` + `e2e.rs`. `shuffle`, `involution`, and `recompute` show a pass need
 not be guard-removal: each owns its own `Category` and runs its own `scan` instead of `strip_guards`, and
 the orchestrator (`features::optimize`) runs every enabled pass and merges their edit spans (a later

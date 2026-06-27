@@ -106,7 +106,7 @@ Pipeline: **input frontend → instructions → `features::optimize` (feature-ga
   (no remaining reference + unreachable by fall-through), always-safe dead-code removal),
   `bytecode.rs`, `opcodes.rs`.
 - `src/features/` — one module per gas-reduction pass, each owning its `META` + a rewrite fn + tests.
-  Five today: `guards` (all revert-guard removal via `strip_guards`; the former `abi`/`math`/`assert`
+  Six today: `guards` (all revert-guard removal via `strip_guards`; the former `abi`/`math`/`assert`
   split was a leaky opcode-sniff and was merged), `shuffle` (always-safe stack-shuffle rescheduling
   via `core::stack::minimize_shuffle`, symbolic input only), `involution` (always-safe cancelling
   of involutive op runs — `NOT NOT` → nothing — symbolic input only; venom leaves `NOT NOT` on
@@ -115,7 +115,10 @@ Pipeline: **input frontend → instructions → `features::optimize` (feature-ga
   also lowers concrete `.hex`/`.bin` gas), and `fold_shift` (always-safe precompute of a constant
   `PUSH a PUSH b SHL/SHR` into one push — e.g. solc's `1 << 160` address mask; length-changing so
   symbolic input only, and it GROWS bytecode to lower per-call gas: the one pass that trades size for
-  gas, solc-only as venom never emits the idiom). `features::optimize` runs the enabled passes and merges their edit spans
+  gas, solc-only as venom never emits the idiom), and `cmpnorm` (always-safe fold of a `SWAP1` before a
+  strict-order comparison into the mirrored comparator — `SWAP1 LT` → `GT`; length-changing so symbolic
+  input only, venom-only as it emits `SWAP1 LT` when comparing two freshly-computed subexpressions while
+  solc orders operands via `DUP` depth). `features::optimize` runs the enabled passes and merges their edit spans
   via `merge_nonoverlapping` (a later pass yields to an earlier one on overlap). Add a pass: a module
   here, register its `META` in `features::registry()`, and run it from `features::optimize`.
 - `src/config.rs` — `FeatureConfig` with precedence defaults → config file → CLI; `enabled_categories()`

@@ -1,9 +1,12 @@
 //! Optimization features. Each feature is one gas-reduction pass.
 //!
-//! Two passes ship today: [`guards`] (trusted-caller revert-guard removal, via the
-//! [`crate::core::strip_guards`] engine) and [`shuffle`] (always-safe stack-shuffle
-//! rescheduling). Each owns one [`Category`]. By default ALL features are enabled;
-//! they can be disabled via the CLI (`--disable`) or a config file.
+//! Six passes ship today: [`guards`] (trusted-caller revert-guard removal, via the
+//! [`crate::core::strip_guards`] engine) and the always-safe rewrites [`shuffle`]
+//! (stack-shuffle rescheduling), [`involution`] (`NOT NOT` cancelling), [`recompute`]
+//! (`OP DUP1` → `OP OP`), [`fold_shift`] (constant `SHL`/`SHR` precompute), and
+//! [`cmpnorm`] (`SWAP1 LT` → `GT` comparison normalization). Each owns one [`Category`].
+//! By default ALL features are enabled; they can be disabled via the CLI (`--disable`)
+//! or a config file.
 //!
 //! [`optimize`] is the single entry point the CLI and e2e harness drive: it runs the
 //! enabled passes over a program and returns the rewritten instructions plus every
@@ -19,6 +22,7 @@ use crate::core::{Category, Instr, Span, apply_spans, strip_guards};
 
 #[cfg(test)]
 pub mod e2e_harness;
+pub mod cmpnorm;
 pub mod fold_shift;
 pub mod guards;
 pub mod involution;
@@ -42,7 +46,14 @@ pub struct FeatureMeta {
 
 /// The full registry of available features.
 pub fn registry() -> Vec<FeatureMeta> {
-    vec![guards::META, shuffle::META, involution::META, recompute::META, fold_shift::META]
+    vec![
+        guards::META,
+        shuffle::META,
+        involution::META,
+        recompute::META,
+        fold_shift::META,
+        cmpnorm::META,
+    ]
 }
 
 /// Find a feature's metadata by key.
@@ -72,12 +83,12 @@ fn merge_nonoverlapping(spans: &mut Vec<Span>, candidates: Vec<Span>) {
 /// applied edit span (on original indices).
 ///
 /// Guard removal runs first. The length-changing passes — stack-shuffle rescheduling,
-/// involution cancelling, and shift-constant folding — run only on symbolic programs:
-/// they change instruction lengths and rely on the sidecar/compiler to relink jumps,
-/// which the concrete-bytecode path cannot do. Recompute is length-preserving (one
-/// single-byte opcode for another), so it runs on every program — including concrete
-/// bytecode. A later pass's span that overlaps one already accepted is dropped, so the
-/// merged edit set stays non-overlapping.
+/// involution cancelling, shift-constant folding, and comparison normalization — run
+/// only on symbolic programs: they change instruction lengths and rely on the
+/// sidecar/compiler to relink jumps, which the concrete-bytecode path cannot do.
+/// Recompute is length-preserving (one single-byte opcode for another), so it runs on
+/// every program — including concrete bytecode. A later pass's span that overlaps one
+/// already accepted is dropped, so the merged edit set stays non-overlapping.
 pub fn optimize(instrs: &[Instr], enabled: &HashSet<Category>) -> (Vec<Instr>, Vec<Span>) {
     let (_, mut spans) = strip_guards(instrs, enabled);
     if is_symbolic(instrs) {
@@ -89,6 +100,9 @@ pub fn optimize(instrs: &[Instr], enabled: &HashSet<Category>) -> (Vec<Instr>, V
         }
         if enabled.contains(&Category::FoldShift) {
             merge_nonoverlapping(&mut spans, fold_shift::scan(instrs));
+        }
+        if enabled.contains(&Category::CmpNorm) {
+            merge_nonoverlapping(&mut spans, cmpnorm::scan(instrs));
         }
     }
     if enabled.contains(&Category::Recompute) {
@@ -142,5 +156,24 @@ mod tests {
         assert!(!is_symbolic(&p), "the test program must be concrete for this invariant");
         let (_out, spans) = optimize(&p, &only(Category::Involution));
         assert!(spans.is_empty(), "involution wrongly rewrote a concrete program (would break jumps)");
+    }
+
+    #[test]
+    fn cmpnorm_fires_on_symbolic_program() {
+        // A symbolic label makes the program relinkable, so the SWAP1/LT folds to GT.
+        let p = parse_str("_sym_x JUMPDEST SWAP1 LT STOP");
+        let (_out, spans) = optimize(&p, &only(Category::CmpNorm));
+        assert_eq!(spans.len(), 1, "a foldable SWAP1/LT in a symbolic program was not rewritten");
+        assert_eq!(spans[0].category, Category::CmpNorm, "the span must carry the CmpNorm category");
+    }
+
+    #[test]
+    fn cmpnorm_never_fires_on_concrete_bytecode() {
+        // Same foldable window, but a fully concrete program: folding it would shift
+        // JUMPDEST offsets with no linker to fix them, so the pass must skip it.
+        let p = parse_str("PUSH1 1 PUSH1 2 SWAP1 LT PUSH1 3");
+        assert!(!is_symbolic(&p), "the test program must be concrete for this invariant");
+        let (_out, spans) = optimize(&p, &only(Category::CmpNorm));
+        assert!(spans.is_empty(), "cmpnorm wrongly rewrote a concrete program (would break jumps)");
     }
 }
