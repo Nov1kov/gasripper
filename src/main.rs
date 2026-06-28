@@ -14,6 +14,7 @@ mod core;
 mod features;
 mod input;
 mod sidecar;
+mod solc;
 
 fn main() {
     std::process::exit(cli::run());

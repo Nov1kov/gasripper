@@ -1,37 +1,36 @@
-//! Creation-bytecode backends via language sidecars.
+//! Creation-bytecode backends.
 //!
 //! gasripper deliberately does NOT port a compiler into Rust. Producing final
 //! creation bytecode (relinking after a strip) is delegated to each language's
-//! native toolchain through a thin sidecar that speaks one shared, line-based
-//! text protocol — so this Rust side stays dependency-free (pure `std`) and the
-//! orchestration is written ONCE for every language.
+//! native toolchain — gasripper writes no linker.
 //!
-//! Two backends, one protocol:
-//!   * [`Lang::Vyper`]    — `scripts/vyper_sidecar.py`, re-assembles with Vyper's
-//!     own `assembly_to_evm`;
-//!   * [`Lang::Solidity`] — `scripts/solc_sidecar.py`, round-trips through
-//!     `solc --asm-json` ⇄ `--import-asm-json`.
+//! Two backends behind one [`Backend`]:
+//!   * [`Lang::Solidity`] — native Rust ([`crate::solc`]): drives the `solc` binary's
+//!     `--asm-json` ⇄ `--import-asm-json` round-trip directly, **no Python**;
+//!   * [`Lang::Vyper`]    — `scripts/vyper_sidecar.py`: re-assembles with Vyper's own
+//!     `assembly_to_evm`, which is a Python library function with no CLI equivalent,
+//!     so this backend still shells out to a Python with the `vyper` package.
 //!
 //! Flow (identical for both):
 //!   1. [`Backend::dump`]  — compile, return RUNTIME instruction descriptors
-//!      (`kind mnem`) + the reference creation bytecode;
+//!      + the reference creation bytecode;
 //!   2. run the shared strip engine to choose instruction indices to delete;
 //!   3. [`Backend::build`] — recompile, delete exactly those RUNTIME indices, and
 //!      let the native toolchain emit the final creation bytecode (constructor
-//!      untouched; a baseline mismatch is a hard error in the sidecar).
+//!      untouched; a baseline mismatch is a hard error).
 //!
-//! Protocol (stdout):
+//! The Vyper sidecar speaks a line-based stdout protocol (so the Rust side parses
+//! plain text):
 //!   dump  -> `REF 0x<hex>` then one `INSTR <kind> <mnem> [value]` line per instruction.
 //!            A concrete literal push carries its `0x..` immediate (the fold pass needs it);
 //!            value-less pushes are symbolic / linker-resolved and never folded.
 //!   build -> `CREATION 0x<hex>` / `REFERENCE 0x<hex>` / `BYTES_BEFORE n` /
-//!            `BYTES_AFTER n`. Delete indices are passed comma-separated; a `#<hex>` edit
-//!            op is a folded push literal the sidecar emits as a single push.
+//!            `BYTES_AFTER n`. Delete edits are passed via `--edit` (see [`serialize_edits`]);
+//!            a `#<hex>` edit op is a folded push literal the sidecar emits as a single push.
 //!
-//! Resolution via environment (so the tool can be pointed at the right toolchain):
-//!   * `GASRIPPER_VYPER_PYTHON` / `GASRIPPER_VYPER_SIDECAR`;
-//!   * `GASRIPPER_SOLC_PYTHON`  / `GASRIPPER_SOLC_SIDECAR` (+ `GASRIPPER_SOLC` for
-//!     the `solc` binary, read by the sidecar).
+//! Toolchain resolution via environment:
+//!   * Solidity — `GASRIPPER_SOLC` (the `solc` binary, default `solc` on PATH);
+//!   * Vyper    — `GASRIPPER_VYPER_PYTHON` / `GASRIPPER_VYPER_SIDECAR`.
 
 use std::process::Command;
 
@@ -92,23 +91,16 @@ impl Backend {
         }
     }
 
+    #[inline]
     fn interpreter(&self) -> String {
-        let var = match self.lang {
-            Lang::Vyper => "GASRIPPER_VYPER_PYTHON",
-            Lang::Solidity => "GASRIPPER_SOLC_PYTHON",
-        };
-        std::env::var(var).unwrap_or_else(|_| "python".to_string())
+        std::env::var("GASRIPPER_VYPER_PYTHON").unwrap_or_else(|_| "python".to_string())
     }
 
+    #[inline]
     fn script(&self) -> String {
-        match self.lang {
-            Lang::Vyper => std::env::var("GASRIPPER_VYPER_SIDECAR").unwrap_or_else(|_| {
-                concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/vyper_sidecar.py").to_string()
-            }),
-            Lang::Solidity => std::env::var("GASRIPPER_SOLC_SIDECAR").unwrap_or_else(|_| {
-                concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/solc_sidecar.py").to_string()
-            }),
-        }
+        std::env::var("GASRIPPER_VYPER_SIDECAR").unwrap_or_else(|_| {
+            concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/vyper_sidecar.py").to_string()
+        })
     }
 
     fn run(
@@ -141,6 +133,13 @@ impl Backend {
 
     /// Compile `source` and return its RUNTIME instructions + reference bytecode.
     pub fn dump(&self, source: &str, evm_version: Option<&str>) -> Result<Dump, String> {
+        match self.lang {
+            Lang::Solidity => crate::solc::dump(source, evm_version),
+            Lang::Vyper => self.dump_vyper(source, evm_version),
+        }
+    }
+
+    fn dump_vyper(&self, source: &str, evm_version: Option<&str>) -> Result<Dump, String> {
         let stdout = self.run("dump", source, evm_version, &[])?;
         let mut instrs = Vec::new();
         let mut reference_hex = None;
@@ -161,6 +160,18 @@ impl Backend {
 
     /// Recompile `source`, apply the strip edits to the RUNTIME, and assemble.
     pub fn build(
+        &self,
+        source: &str,
+        spans: &[crate::core::Span],
+        evm_version: Option<&str>,
+    ) -> Result<Build, String> {
+        match self.lang {
+            Lang::Solidity => crate::solc::build(source, spans, evm_version),
+            Lang::Vyper => self.build_vyper(source, spans, evm_version),
+        }
+    }
+
+    fn build_vyper(
         &self,
         source: &str,
         spans: &[crate::core::Span],
@@ -200,7 +211,7 @@ impl Backend {
 /// this full symbol. The strip engine reasons over arity and mnemonics, so a value-less push
 /// stays a non-literal (never folded); a concrete literal push carries its `0x..` immediate so
 /// the fold pass can precompute a constant shift. Shared by every language backend.
-fn descriptor_to_instr(kind: &str, payload: &str) -> Result<Instr, String> {
+pub(crate) fn descriptor_to_instr(kind: &str, payload: &str) -> Result<Instr, String> {
     let i = match kind {
         "op" => Instr::new(Kind::Op, vec![payload.into()]),
         "push" => match payload.split_once(' ') {

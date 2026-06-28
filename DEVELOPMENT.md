@@ -60,9 +60,10 @@ The e2e tests **skip cleanly** when their toolchain is absent. To run them for r
 at the compilers via the environment:
 
 ```bash
-# Vyper: a Python with `vyper` importable (tested on 0.4.3)
+# Vyper: a Python with `vyper` importable (tested on 0.4.3) — the venom assembler
+# is a Python library function with no CLI, so this backend uses a sidecar script
 export GASRIPPER_VYPER_PYTHON=/path/to/python-with-vyper
-# Solidity: any stdlib Python plus the solc binary
+# Solidity: just the solc binary (the asm-json round-trip is native Rust, no Python)
 export GASRIPPER_SOLC=/path/to/solc
 
 cargo test --bin gasripper -- --nocapture     # prints per-case gas/bytes saved
