@@ -183,8 +183,8 @@ fn vyper_cmpnorm_adds_a_step() {
 // non-payable check), so the stages are ordered recompute -> +guards -> +foldshift to show each
 // addition lower gas. This is also the regression guard for the guards+foldshift InvalidJump bug:
 // foldshift folds the `PUSH 0x4e487b71 PUSH 0xe0 SHL` Panic-selector inside an inverse guard's
-// inline revert block, which guards' DCE drops — the solc sidecar must drop it rather than strand
-// the folded push (see scripts/solc_sidecar.py::_apply_edits).
+// inline revert block, which guards' DCE drops — the native solc backend must drop it rather than
+// strand the folded push (see src/solc.rs::apply_edits).
 const SOLIDITY_CONTRACT: &str = r#"
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;

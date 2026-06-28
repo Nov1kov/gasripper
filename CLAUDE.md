@@ -142,13 +142,21 @@ assembly only — not on resolved raw bytecode/Solidity. `Loaded.symbolic` gates
 programs allow `--emit-asm` only; concrete `.hex`/`.bin` round-trip to `--emit-bytecode`. There is
 deliberately **no hand-written linker** (wrong bytecode in a gas tool is dangerous).
 
-`--emit-creation` (Vyper/Solidity) produces deployable creation bytecode via a per-language sidecar
-(`src/sidecar.rs` + `scripts/{vyper,solc}_sidecar.py`): the compiler emits symbolic runtime assembly,
-the Rust engine strips it, and the **compiler's own assembler** re-links (constructor untouched). A
-baseline invariant (assemble with no deletions == the compiler's reference bytecode) fails fast on
+`--emit-creation` (Vyper/Solidity) produces deployable creation bytecode and the **compiler's own
+assembler** re-links it (constructor untouched), so gasripper writes no linker. `src/sidecar.rs`
+holds the shared `Backend` and dispatches per language:
+- **Solidity** is **native Rust** (`src/solc.rs`, no Python): it drives the `solc` binary's
+  `--asm-json` ⇄ `--import-asm-json` round-trip directly, parsing/editing the asm JSON with
+  `serde_json` (the only reason `serde_json` is a dependency). A user with just `solc` on PATH needs
+  no Python.
+- **Vyper** still uses a Python sidecar (`scripts/vyper_sidecar.py`) because venom's assembler
+  (`compile_ir.assembly_to_evm`) is a Python library function with **no CLI equivalent**; the backend
+  shells out to a Python with the `vyper` package importable.
+
+A baseline invariant (assemble with no deletions == the compiler's reference bytecode) fails fast on
 drift. Toolchains come from `GASRIPPER_*` env vars (exact paths, the revert-idiom normalization, and
 the version-pinned gas caveat are in the `gasripper-vyper` / `gasripper-solidity` skills). `revm` is a
-**dev-dependency only** (e2e gas proofs); the shipped binary stays pure `std`.
+**dev-dependency only** (e2e gas proofs); the shipped binary depends on `clap`/`tracing`/`serde_json`.
 
 ## Safety invariants (do not break)
 

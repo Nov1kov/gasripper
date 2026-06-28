@@ -141,11 +141,11 @@ features enabled), passing just the input path is enough.
 The type is detected by extension; it can be set explicitly with
 `--input-kind <vyper|solidity|asm|bytecode>`. For input `-` (stdin) the type is required.
 
-For a Vyper/Solidity source the **report and `--emit-asm` use the sidecar dump** (the same path
+For a Vyper/Solidity source the **report and `--emit-asm` use the backend dump** (the same path
 `--emit-creation` uses), so the report matches what would actually be assembled — in particular the
 `inline` pass is visible. venom's internal-function symbols are multi-token (they contain spaces and
 commas), which the plain `vyper -f asm` text frontend fragments; that frontend is kept only as a
-fallback when the sidecar is unavailable (set `GASRIPPER_VYPER_PYTHON` / `GASRIPPER_SOLC`), and the
+fallback when the Vyper backend is unavailable (set `GASRIPPER_VYPER_PYTHON`), and the
 `inline` count then reads 0.
 
 ## Installation
@@ -184,12 +184,13 @@ gasripper contract.vy --disable guards --evm-version cancun --emit-creation out.
 transaction. 
 
 ```bash
-# Vyper: a Python with `vyper` importable (tested on 0.4.3)
+# Vyper: a Python with `vyper` importable (tested on 0.4.3) — its assembler is a
+# Python library function with no CLI, so this backend still needs the package
 GASRIPPER_VYPER_PYTHON=/path/to/python gasripper contract.vy --emit-creation out.hex
 
-# Solidity: a Python (stdlib only) plus the solc binary
+# Solidity: just the solc binary (no Python — the asm-json round-trip is native Rust)
 GASRIPPER_SOLC=/path/to/solc gasripper contract.sol --emit-creation out.hex
-# overrides: GASRIPPER_{VYPER,SOLC}_SIDECAR (script path), GASRIPPER_SOLC_PYTHON (interpreter)
+# override: GASRIPPER_VYPER_SIDECAR (the vyper sidecar script path)
 ```
 
 `GASRIPPER_VYPER_PYTHON` also selects the interpreter for the plain `.vy` frontend (it runs
