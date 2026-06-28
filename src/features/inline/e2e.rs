@@ -251,7 +251,13 @@ fn vyper_inline_dethreads_two_call_sites_in_one_function() {
     // a(3,4): call 1 = _advance_to(3,4) -> else -> (4<<11)|3 = 8195 (r); call 2 = _advance_to(4,3)
     // -> then -> (1<<22)|(3<<11) = 4200448; returns r + meta = 8195 + 4200448 = 4208643.
     let calldata = encode_call("a(uint256,uint256)", &[3, 4]);
-    let r = match measure_with(&Backend::new(Lang::Vyper), &path, Category::Inline, calldata, 40) {
+    let r = match measure_with(
+        &Backend::new(Lang::Vyper),
+        &path,
+        Category::Inline,
+        calldata,
+        40,
+    ) {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!("SKIP vyper inline twice-in-one e2e (toolchain unavailable): {e}");

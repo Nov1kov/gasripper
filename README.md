@@ -143,6 +143,13 @@ features enabled), passing just the input path is enough.
 The type is detected by extension; it can be set explicitly with
 `--input-kind <vyper|solidity|asm|bytecode>`. For input `-` (stdin) the type is required.
 
+For a Vyper/Solidity source the **report and `--emit-asm` use the sidecar dump** (the same path
+`--emit-creation` uses), so the report matches what would actually be assembled — in particular the
+`inline` pass is visible. venom's internal-function symbols are multi-token (they contain spaces and
+commas), which the plain `vyper -f asm` text frontend fragments; that frontend is kept only as a
+fallback when the sidecar is unavailable (set `GASRIPPER_VYPER_PYTHON` / `GASRIPPER_SOLC`), and the
+`inline` count then reads 0.
+
 ## Installation
 
 ```bash

@@ -9,9 +9,9 @@ use clap::{CommandFactory, Parser};
 use tracing_subscriber::EnvFilter;
 
 use crate::config::FeatureConfig;
-use crate::core::Span;
 use crate::core::asm::render;
 use crate::core::bytecode::{assemble, bytes_to_hex};
+use crate::core::{Instr, Span};
 use crate::features::{self, optimize_with};
 use crate::input::{self, InputKind, Loaded};
 use crate::sidecar::{Backend, Lang};
@@ -161,6 +161,19 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
         return emit_creation(&input, out, &cli, &config);
     }
 
+    // For a compiler source the report/asm must use the sidecar dump (as --emit-creation does):
+    // the text frontend fragments venom's multi-token internal-function symbols, hiding the inline
+    // pass. Fall back to the text frontend when the sidecar is unavailable (inline counts read 0).
+    if let Some(backend) = compiler_backend(&input, cli.input_kind) {
+        match backend.dump(&input, cli.evm_version.as_deref()) {
+            Ok(dump) => return report_compiler(dump, &backend, &input, &cli, &config),
+            Err(e) => tracing::warn!(
+                "sidecar dump unavailable ({e}); reporting via the text frontend — \
+                 inline detection needs GASRIPPER_VYPER_PYTHON (a python with vyper importable)"
+            ),
+        }
+    }
+
     let loaded = input::load(&input, cli.input_kind, cli.evm_version.as_deref())?;
 
     let enabled = config.enabled_categories();
@@ -198,18 +211,24 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
     Ok(0)
 }
 
+/// The creation-bytecode backend for a compiler source (Vyper/Solidity), or `None` for an
+/// assembly/bytecode/stdin input the sidecar cannot drive.
+fn compiler_backend(input: &str, kind: InputKind) -> Option<Backend> {
+    match kind {
+        InputKind::Vyper => Some(Backend::new(Lang::Vyper)),
+        InputKind::Solidity => Some(Backend::new(Lang::Solidity)),
+        InputKind::Auto => Backend::from_extension(input),
+        _ => None,
+    }
+}
+
 /// Resolve the creation-bytecode backend from the explicit kind or file extension.
 fn resolve_backend(input: &str, kind: InputKind) -> Result<Backend, String> {
-    match kind {
-        InputKind::Vyper => Ok(Backend::new(Lang::Vyper)),
-        InputKind::Solidity => Ok(Backend::new(Lang::Solidity)),
-        InputKind::Auto => Backend::from_extension(input).ok_or_else(|| {
-            "--emit-creation needs a Vyper (.vy) or Solidity (.sol) source; \
-             set --input-kind vyper|solidity for other paths"
-                .into()
-        }),
-        _ => Err("--emit-creation supports only Vyper/Solidity sources".into()),
-    }
+    compiler_backend(input, kind).ok_or_else(|| {
+        "--emit-creation needs a Vyper (.vy) or Solidity (.sol) source; \
+         set --input-kind vyper|solidity for other paths"
+            .into()
+    })
 }
 
 /// Emit optimized creation bytecode for a compiler source (Vyper/Solidity) via
@@ -230,7 +249,9 @@ fn emit_creation(input: &str, out: &str, cli: &Cli, config: &FeatureConfig) -> R
 
     println!("source: {} ({input})", backend.label());
     println!("runtime instructions: {}", dump.instrs.len());
-    print_span_summary(&spans, &dump.instrs);
+    print_enabled(config);
+    println!("potential improvements: {}", spans.len());
+    print_spans(&spans, &dump.instrs);
     println!(
         "\nwrote creation bytecode: {out}  ({} -> {} bytes, {:+})",
         built.bytes_before,
@@ -240,18 +261,65 @@ fn emit_creation(input: &str, out: &str, cli: &Cli, config: &FeatureConfig) -> R
     Ok(0)
 }
 
-/// Print the strip count and a few sample stripped ranges.
-fn print_span_summary(spans: &[Span], instrs: &[crate::core::Instr]) {
-    println!("checks to strip: {}", spans.len());
+/// Report what each enabled pass would rewrite, sourcing instructions from the sidecar dump (so a
+/// compiler source's report matches what `--emit-creation` produces — the text frontend cannot see
+/// the inline pass). Honors `--emit-asm` by rendering the optimized runtime.
+fn report_compiler(
+    dump: crate::sidecar::Dump,
+    backend: &Backend,
+    input: &str,
+    cli: &Cli,
+    config: &FeatureConfig,
+) -> Result<i32, String> {
+    let enabled = config.enabled_categories();
+    let (optimized, spans) = optimize_with(&dump.instrs, &enabled, config.inline_max_body());
+
+    println!("source: {} ({input})", backend.label());
+    println!("runtime instructions: {}", dump.instrs.len());
+    print_enabled(config);
+    println!("potential improvements: {}", spans.len());
+    print_spans(&spans, &dump.instrs);
+
+    if let Some(path) = &cli.emit_asm {
+        fs::write(path, render(&optimized)).map_err(|e| format!("could not write {path}: {e}"))?;
+        println!("\nwrote assembly: {path}");
+    } else {
+        println!(
+            "\nnote: input is symbolic — final bytecode requires linking; \
+             use --emit-creation for deployable bytecode (or --emit-asm for the optimized assembly)."
+        );
+    }
+    if cli.emit_bytecode.is_some() {
+        return Err(
+            "input is symbolic (labels _sym_/_mem_/_OFST): use --emit-creation for deployable \
+             bytecode, not --emit-bytecode."
+                .into(),
+        );
+    }
+    Ok(0)
+}
+
+/// Print the per-feature breakdown and one (length-capped) sample rewritten range per feature that
+/// fired. Registry order, so the output is stable; features that found nothing are omitted.
+fn print_spans(spans: &[Span], instrs: &[Instr]) {
     if spans.is_empty() {
         return;
     }
-    println!("\nsample stripped ranges:");
-    for s in spans.iter().take(5) {
-        let seq: Vec<String> = instrs[s.start..=s.end]
+    print_category_counts(spans);
+    println!("\nsample rewritten ranges (one per feature):");
+    for f in features::registry() {
+        let Some(s) = spans.iter().find(|s| s.category == f.category) else {
+            continue;
+        };
+        let len = s.end - s.start + 1;
+        let mut seq: Vec<String> = instrs[s.start..=s.end]
             .iter()
+            .take(8)
             .map(|x| x.mnem().to_string())
             .collect();
+        if len > 8 {
+            seq.push("…".to_string());
+        }
         println!(
             "  [{}..{}] {} -> {}",
             s.start,
@@ -273,6 +341,23 @@ fn print_category_counts(spans: &[Span]) {
     }
 }
 
+/// Print the comma-separated list of enabled features.
+fn print_enabled(config: &FeatureConfig) {
+    let on: Vec<&str> = features::registry()
+        .into_iter()
+        .filter(|f| config.is_enabled(f.key))
+        .map(|f| f.key)
+        .collect();
+    println!(
+        "enabled features: {}",
+        if on.is_empty() {
+            "—".to_string()
+        } else {
+            on.join(", ")
+        }
+    );
+}
+
 fn print_features() {
     println!("Available features (all enabled by default):\n");
     for f in features::registry() {
@@ -289,26 +374,9 @@ fn print_features() {
 fn print_report(loaded: &Loaded, spans: &[Span], config: &FeatureConfig, emitting_asm: bool) {
     println!("source: {}", loaded.kind);
     println!("input instructions: {}", loaded.instrs.len());
-
-    let on: Vec<&str> = features::registry()
-        .into_iter()
-        .filter(|f| config.is_enabled(f.key))
-        .map(|f| f.key)
-        .collect();
-    println!(
-        "enabled features: {}",
-        if on.is_empty() {
-            "—".to_string()
-        } else {
-            on.join(", ")
-        }
-    );
-
+    print_enabled(config);
     println!("potential improvements: {}", spans.len());
-    if spans.is_empty() {
-        return;
-    }
-    print_category_counts(spans);
+    print_spans(spans, &loaded.instrs);
 
     if loaded.symbolic && !emitting_asm {
         println!(
