@@ -2,6 +2,7 @@
 
 # gasripper
 
+[![CI](https://github.com/Nov1kov/gasripper/actions/workflows/ci.yml/badge.svg)](https://github.com/Nov1kov/gasripper/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A Rust CLI tool that maximally optimizes an EVM contract for gas. The goal is to **not change
