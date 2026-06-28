@@ -26,6 +26,7 @@ strictly in English.
 - Minor inconsistencies and typos in the existing code may be fixed.
 - Constantly apply the boy-scout rule. If you touch some code, leave it better than it was.
 - **Keep the documentation up to date.** On major architecture changes, adding new modules/crates, or changing the data format — you MUST update the corresponding documents (`README.md`, `DEVELOPMENT.md`, and the per-feature READMEs under `src/features/`). Documentation must not diverge from the code. Check the description you add against the actual code instead of writing it from memory.
+- **All `README.md` files and project documentation MUST be as concise as possible.** Before adding anything, search the document (and the other project docs) for an existing section on that topic — if it is already covered, update that spot instead of writing a new paragraph, and never repeat a fact that was already stated elsewhere.
 
 ### CODE DESIGN
 - **DRY (Don't Repeat Yourself)**: if you see repeated code (3+ duplicated lines), you MUST extract it into a separate method/function. Code duplication is not acceptable. **DRY ≠ reducing arguments**: cutting the number of parameters by fixing the rest is not deduplication — it is a hidden restriction of flexibility.
