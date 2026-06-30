@@ -7,9 +7,11 @@
 //! Two backends behind one [`Backend`]:
 //!   * [`Lang::Solidity`] — native Rust ([`crate::solc`]): drives the `solc` binary's
 //!     `--asm-json` ⇄ `--import-asm-json` round-trip directly, **no Python**;
-//!   * [`Lang::Vyper`]    — `scripts/vyper_sidecar.py`: re-assembles with Vyper's own
-//!     `assembly_to_evm`, which is a Python library function with no CLI equivalent,
-//!     so this backend still shells out to a Python with the `vyper` package.
+//!   * [`Lang::Vyper`]    — a Python sidecar (`scripts/vyper_sidecar.py`, embedded in the
+//!     binary with `include_str!` and materialized to a temp cache on first use, so a
+//!     `cargo install` ships no loose files): re-assembles with Vyper's own
+//!     `assembly_to_evm`, a Python library function with no CLI equivalent, so this
+//!     backend still shells out to a Python with the `vyper` package.
 //!
 //! Flow (identical for both):
 //!   1. [`Backend::dump`]  — compile, return RUNTIME instruction descriptors
@@ -30,11 +32,23 @@
 //!
 //! Toolchain resolution via environment:
 //!   * Solidity — `GASRIPPER_SOLC` (the `solc` binary, default `solc` on PATH);
-//!   * Vyper    — `GASRIPPER_VYPER_PYTHON` / `GASRIPPER_VYPER_SIDECAR`.
+//!   * Vyper    — `GASRIPPER_VYPER_PYTHON` (the embedded sidecar is materialized at runtime).
 
+use std::path::Path;
 use std::process::Command;
 
 use crate::core::asm::{Instr, Kind};
+
+/// The Vyper sidecar source, compiled into the binary so an installed `gasripper`
+/// carries it with no loose files. Materialized to disk on first Vyper use.
+const SIDECAR_SRC: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/scripts/vyper_sidecar.py"
+));
+
+/// Cache file name for the materialized sidecar, versioned so a new gasripper
+/// release overwrites a stale copy instead of running an old script.
+const SIDECAR_NAME: &str = concat!("vyper_sidecar-", env!("CARGO_PKG_VERSION"), ".py");
 
 /// Which language toolchain produces the creation bytecode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,13 +110,6 @@ impl Backend {
         std::env::var("GASRIPPER_VYPER_PYTHON").unwrap_or_else(|_| "python".to_string())
     }
 
-    #[inline]
-    fn script(&self) -> String {
-        std::env::var("GASRIPPER_VYPER_SIDECAR").unwrap_or_else(|_| {
-            concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/vyper_sidecar.py").to_string()
-        })
-    }
-
     fn run(
         &self,
         subcmd: &str,
@@ -112,7 +119,9 @@ impl Backend {
     ) -> Result<String, String> {
         let interp = self.interpreter();
         let mut cmd = Command::new(&interp);
-        cmd.arg(self.script()).arg(subcmd).arg(source);
+        cmd.arg(materialize_sidecar(&std::env::temp_dir().join("gasripper"))?)
+            .arg(subcmd)
+            .arg(source);
         if let Some(ev) = evm_version {
             cmd.arg("--evm-version").arg(ev);
         }
@@ -245,4 +254,50 @@ pub fn serialize_edits(spans: &[crate::core::Span]) -> String {
         .map(|s| format!("{}:{}:{}", s.start, s.end, s.replacement.join(",")))
         .collect::<Vec<_>>()
         .join(";")
+}
+
+/// Write the embedded sidecar into `dir` (creating it) and return its path. Skips the
+/// write when an up-to-date copy is already there; writes via a pid-tagged temp file and
+/// an atomic rename so concurrent gasripper processes never read a half-written script.
+fn materialize_sidecar(dir: &Path) -> Result<String, String> {
+    std::fs::create_dir_all(dir)
+        .map_err(|e| format!("could not create sidecar cache dir {}: {e}", dir.display()))?;
+    let path = dir.join(SIDECAR_NAME);
+    let fresh = std::fs::read_to_string(&path)
+        .map(|s| s == SIDECAR_SRC)
+        .unwrap_or(false);
+    if !fresh {
+        let tmp = dir.join(format!("{SIDECAR_NAME}.{}.tmp", std::process::id()));
+        std::fs::write(&tmp, SIDECAR_SRC)
+            .map_err(|e| format!("could not write vyper sidecar {}: {e}", tmp.display()))?;
+        std::fs::rename(&tmp, &path)
+            .map_err(|e| format!("could not install vyper sidecar {}: {e}", path.display()))?;
+    }
+    Ok(path.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn materialize_writes_embedded_sidecar() {
+        // Materializing must drop a .py whose bytes equal the compiled-in source, and a
+        // second call over the existing file must not fail (installed-binary path).
+        let dir = std::env::temp_dir().join(format!("gasripper-mat-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = materialize_sidecar(&dir).expect("embedded vyper sidecar did not materialize");
+        let written = std::fs::read_to_string(&path).expect("materialized sidecar is unreadable");
+        assert_eq!(
+            written, SIDECAR_SRC,
+            "materialized sidecar diverges from the embedded source"
+        );
+        let again =
+            materialize_sidecar(&dir).expect("re-materializing over an existing sidecar failed");
+        assert_eq!(
+            again, path,
+            "idempotent materialization returned a different path"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

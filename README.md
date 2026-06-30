@@ -47,19 +47,6 @@ pie showData
 The bytecode shrinks **even with inlining enabled** — the optimizer is a net reduction in size,
 not a trade.
 
-## Operating point: already-maximally-optimized input
-
-gasripper consumes the compiler's **already-optimized** symbolic assembly — *after* Vyper's venom
-(`OptimizationLevel.GAS`) or Solidity's optimizer. The classic peephole and redundant storage-access
-wins. 
-The latest compiler releases pinned and tested in CI/e2e — gasripper tracks the **latest** release of
-each language, driving the compiler's own assembler:
-
-| Toolchain | Pinned version |
-|---|---|
-| Vyper | 0.4.3 |
-| Solidity (solc) | 0.8.24 |
-
 ## How it works
 
 Both compilers lower a contract to a **symbolic assembly** (labels not yet resolved to addresses).
@@ -86,6 +73,85 @@ flowchart LR
     B --> E["deploy → runs on EVM"]
     classDef opt fill:#ffe1e1,stroke:#d33,stroke-width:2px,color:#000;
 ```
+
+## Installation
+
+```bash
+# from crates.io
+cargo install gasripper
+
+# or build from source
+cargo build --release   # binary: target/release/gasripper
+```
+
+The optimizer core is a self-contained, pure-`std` binary — the Vyper sidecar script is
+bundled inside it, so a `cargo install` needs no extra files.
+
+The compilers are **runtime** tools, not build deps. They are only required for `.vy`/`.sol`
+input and `--emit-creation`:
+
+| Backend | Needs at runtime | Override |
+|---|---|---|
+| Solidity | `solc` on PATH (native Rust, no Python) | `GASRIPPER_SOLC` |
+| Vyper | a Python with the `vyper` package importable | `GASRIPPER_VYPER_PYTHON` |
+
+Raw `.asm`/`.evm`/`.hex`/`.bin` input needs no compiler at all.
+
+## Usage
+
+```bash
+# report: what would be stripped (default behavior)
+gasripper contract.asm
+
+# write the optimized assembly
+gasripper contract.asm --emit-asm out.asm
+
+# write the optimized bytecode (non-symbolic input only: .hex/.bin)
+gasripper --input-kind bytecode code.hex --emit-bytecode out.hex
+
+# write deployable optimized CREATION bytecode (the product) — Vyper or Solidity
+gasripper contract.vy  --emit-creation out.hex
+gasripper contract.sol --emit-creation out.hex
+
+# disable the strip and pin the EVM version
+gasripper contract.vy --disable guards --evm-version cancun --emit-creation out.hex
+```
+
+## Input
+
+| Type | Extension | How instructions are obtained |
+|---|---|---|
+| Raw assembly | `.asm` / `.evm` | parsed directly (including symbolic venom: `_sym_*`, `_OFST`, `_mem_`) |
+| Raw bytecode | `.hex` / `.bin` | disassembled |
+| Vyper contract | `.vy` | compiled with `vyper -f asm`, runtime body only — the deploy preamble is excluded (needs `vyper` in PATH, or set `GASRIPPER_VYPER_PYTHON`) — **experimental** |
+| Solidity contract | `.sol` | compiled with `solc --bin-runtime` (needs `solc` in PATH) — **experimental** |
+
+The type is detected by extension; it can be set explicitly with
+`--input-kind <vyper|solidity|asm|bytecode>`. For input `-` (stdin) the type is required.
+
+For a Vyper/Solidity source the **report and `--emit-asm` use the backend dump** (the same path
+`--emit-creation` uses), so the report matches what would actually be assembled — in particular the
+`inline` pass is visible. venom's internal-function symbols are multi-token (they contain spaces and
+commas), which the plain `vyper -f asm` text frontend fragments; that frontend is kept only as a
+fallback when the Vyper backend is unavailable (set `GASRIPPER_VYPER_PYTHON`), and the
+`inline` count then reads 0.
+
+### Creation bytecode (the product)
+
+`--emit-creation` produces **deployable creation bytecode** — the hex you send in a deployment
+transaction. 
+
+```bash
+# Vyper: a Python with `vyper` importable (tested on 0.4.3) — its assembler is a
+# Python library function with no CLI, so this backend still needs the package
+GASRIPPER_VYPER_PYTHON=/path/to/python gasripper contract.vy --emit-creation out.hex
+
+# Solidity: just the solc binary (no Python — the asm-json round-trip is native Rust)
+GASRIPPER_SOLC=/path/to/solc gasripper contract.sol --emit-creation out.hex
+```
+
+`GASRIPPER_VYPER_PYTHON` also selects the interpreter for the plain `.vy` frontend (it runs
+`<python> -m vyper`).
 
 ## Features
 
@@ -130,72 +196,18 @@ shuffle = true
 By default **no config file is needed or searched for** — the tool runs on defaults alone (all
 features enabled), passing just the input path is enough.
 
-## Input
+## Operating point: already-maximally-optimized input
 
-| Type | Extension | How instructions are obtained |
-|---|---|---|
-| Raw assembly | `.asm` / `.evm` | parsed directly (including symbolic venom: `_sym_*`, `_OFST`, `_mem_`) |
-| Raw bytecode | `.hex` / `.bin` | disassembled |
-| Vyper contract | `.vy` | compiled with `vyper -f asm`, runtime body only — the deploy preamble is excluded (needs `vyper` in PATH, or set `GASRIPPER_VYPER_PYTHON`) — **experimental** |
-| Solidity contract | `.sol` | compiled with `solc --bin-runtime` (needs `solc` in PATH) — **experimental** |
+gasripper consumes the compiler's **already-optimized** symbolic assembly — *after* Vyper's venom
+(`OptimizationLevel.GAS`) or Solidity's optimizer. The classic peephole and redundant storage-access
+wins. 
+The latest compiler releases pinned and tested in CI/e2e — gasripper tracks the **latest** release of
+each language, driving the compiler's own assembler:
 
-The type is detected by extension; it can be set explicitly with
-`--input-kind <vyper|solidity|asm|bytecode>`. For input `-` (stdin) the type is required.
-
-For a Vyper/Solidity source the **report and `--emit-asm` use the backend dump** (the same path
-`--emit-creation` uses), so the report matches what would actually be assembled — in particular the
-`inline` pass is visible. venom's internal-function symbols are multi-token (they contain spaces and
-commas), which the plain `vyper -f asm` text frontend fragments; that frontend is kept only as a
-fallback when the Vyper backend is unavailable (set `GASRIPPER_VYPER_PYTHON`), and the
-`inline` count then reads 0.
-
-## Installation
-
-```bash
-cargo build --release
-# binary: target/release/gasripper
-```
-
-The compilers are runtime tools,
-not build deps: `.vy`/`.sol` input and `--emit-creation` need `vyper` / `solc` installed.
-
-## Usage
-
-```bash
-# report: what would be stripped (default behavior)
-gasripper contract.asm
-
-# write the optimized assembly
-gasripper contract.asm --emit-asm out.asm
-
-# write the optimized bytecode (non-symbolic input only: .hex/.bin)
-gasripper --input-kind bytecode code.hex --emit-bytecode out.hex
-
-# write deployable optimized CREATION bytecode (the product) — Vyper or Solidity
-gasripper contract.vy  --emit-creation out.hex
-gasripper contract.sol --emit-creation out.hex
-
-# disable the strip and pin the EVM version
-gasripper contract.vy --disable guards --evm-version cancun --emit-creation out.hex
-```
-
-### Creation bytecode (the product)
-
-`--emit-creation` produces **deployable creation bytecode** — the hex you send in a deployment
-transaction. 
-
-```bash
-# Vyper: a Python with `vyper` importable (tested on 0.4.3) — its assembler is a
-# Python library function with no CLI, so this backend still needs the package
-GASRIPPER_VYPER_PYTHON=/path/to/python gasripper contract.vy --emit-creation out.hex
-
-# Solidity: just the solc binary (no Python — the asm-json round-trip is native Rust)
-GASRIPPER_SOLC=/path/to/solc gasripper contract.sol --emit-creation out.hex
-# override: GASRIPPER_VYPER_SIDECAR (the vyper sidecar script path)
-```
-
-`GASRIPPER_VYPER_PYTHON` also selects the interpreter for the plain `.vy` frontend (it runs
-`<python> -m vyper`). 
+| Toolchain | Pinned version |
+|---|---|
+| Vyper | 0.4.3 |
+| Solidity (solc) | 0.8.24 |
 
 ## Limitations
 

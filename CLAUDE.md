@@ -151,7 +151,8 @@ holds the shared `Backend` and dispatches per language:
   no Python.
 - **Vyper** still uses a Python sidecar (`scripts/vyper_sidecar.py`) because venom's assembler
   (`compile_ir.assembly_to_evm`) is a Python library function with **no CLI equivalent**; the backend
-  shells out to a Python with the `vyper` package importable.
+  shells out to a Python with the `vyper` package importable. The script is embedded in the binary via
+  `include_str!` and materialized to a temp cache at runtime, so `cargo install` ships no loose files.
 
 A baseline invariant (assemble with no deletions == the compiler's reference bytecode) fails fast on
 drift. Toolchains come from `GASRIPPER_*` env vars (exact paths, the revert-idiom normalization, and
