@@ -5,7 +5,7 @@
 
 use std::fs;
 
-use clap::{CommandFactory, Parser};
+use clap::{CommandFactory, FromArgMatches, Parser};
 use tracing_subscriber::EnvFilter;
 
 use crate::config::FeatureConfig;
@@ -33,6 +33,22 @@ FEATURES (all enabled by default):
     inline     — relocate a small internal function into its call sites, removing
                  the call/return indirection (size via --inline-max-body; symbolic
                  input only)";
+
+/// The `superopt` line, appended to [`AFTER_HELP`] only in an `smt`-feature build (the pass is
+/// compiled out otherwise). Keeps the help in sync with [`features::registry`].
+#[cfg(feature = "smt")]
+const SUPEROPT_HELP: &str = "
+    superopt   — replace a pure straight-line block with a cheaper SMT-proven-
+                 equivalent sequence (opt-in `smt` feature; symbolic input only)";
+
+/// The feature help block, plus the `superopt` line when built with the `smt` feature.
+fn after_help() -> String {
+    #[cfg_attr(not(feature = "smt"), allow(unused_mut))]
+    let mut help = String::from(AFTER_HELP);
+    #[cfg(feature = "smt")]
+    help.push_str(SUPEROPT_HELP);
+    help
+}
 
 /// Super-aggressive gas optimizer for EVM bytecode/assembly.
 #[derive(Parser, Debug)]
@@ -105,12 +121,17 @@ fn init_tracing() {
 /// CLI entry point. Returns the process exit code.
 pub fn run() -> i32 {
     init_tracing();
+    let command = Cli::command().after_help(after_help());
     if std::env::args_os().len() <= 1 {
-        let _ = Cli::command().print_help();
+        let _ = command.clone().print_help();
         println!();
         return 0;
     }
-    run_inner(Cli::parse()).unwrap_or_else(|e| {
+    let cli = match Cli::from_arg_matches_mut(&mut command.get_matches()) {
+        Ok(cli) => cli,
+        Err(e) => e.exit(),
+    };
+    run_inner(cli).unwrap_or_else(|e| {
         tracing::error!("{e}");
         1
     })

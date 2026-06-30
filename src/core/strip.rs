@@ -45,6 +45,10 @@ pub enum Category {
     CmpNorm,
     /// A small internal function inlined into its call sites (the call/return indirection removed).
     Inline,
+    /// A pure straight-line block replaced by a cheaper SMT-proven-equivalent sequence
+    /// ([`crate::features::superopt`], opt-in `smt` feature).
+    #[cfg(feature = "smt")]
+    Superopt,
 }
 
 impl Category {
@@ -59,6 +63,8 @@ impl Category {
             Category::FoldShift => "foldshift",
             Category::CmpNorm => "cmpnorm",
             Category::Inline => "inline",
+            #[cfg(feature = "smt")]
+            Category::Superopt => "superopt",
         }
     }
 }

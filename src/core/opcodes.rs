@@ -183,3 +183,27 @@ pub fn push_immediate_len(name: &str) -> Option<usize> {
     let n: usize = name.strip_prefix("PUSH")?.parse().ok()?;
     if (1..=32).contains(&n) { Some(n) } else { None }
 }
+
+/// Static gas cost of the result-invariant arithmetic, comparison and stack opcodes the
+/// block superoptimizer reasons about (`G_base` = 2, `G_verylow` = 3, `G_low` = 5). `None`
+/// for any opcode outside that pure set — a block containing one is not a superopt input,
+/// so its cost is never queried. PUSH1..32/DUP*/SWAP* are generated like in [`tables`].
+#[cfg(feature = "smt")]
+pub fn gas(name: &str) -> Option<u32> {
+    if push_immediate_len(name).is_some() {
+        return Some(3); // G_verylow
+    }
+    if let Some(rest) = name.strip_prefix("DUP").or_else(|| name.strip_prefix("SWAP")) {
+        if rest.parse::<u8>().map(|n| (1..=16).contains(&n)).unwrap_or(false) {
+            return Some(3); // G_verylow
+        }
+    }
+    let g = match name {
+        "PUSH0" | "POP" => 2, // G_base
+        "ADD" | "SUB" | "NOT" | "LT" | "GT" | "SLT" | "SGT" | "EQ" | "ISZERO" | "AND" | "OR"
+        | "XOR" | "BYTE" | "SHL" | "SHR" | "SAR" => 3, // G_verylow
+        "MUL" | "DIV" | "SDIV" | "MOD" | "SMOD" | "SIGNEXTEND" => 5, // G_low
+        _ => return None,
+    };
+    Some(g)
+}

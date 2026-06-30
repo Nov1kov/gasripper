@@ -159,9 +159,11 @@ mod tests {
             c.is_enabled("cmpnorm"),
             "the cmpnorm feature must default to enabled"
         );
+        // Seven default categories ship; an `smt`-feature build adds `superopt`.
+        let expected = 7 + cfg!(feature = "smt") as usize;
         assert_eq!(
             c.enabled_categories().len(),
-            7,
+            expected,
             "every shipped category must be enabled by default"
         );
         assert_eq!(

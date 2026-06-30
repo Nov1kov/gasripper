@@ -90,7 +90,7 @@ size threshold.
 ## Configurable threshold (the first numeric feature)
 
 Inline is the first feature with a numeric parameter: only functions whose body is at most
-`inline_max_body` instructions are inlined (default **20**), since duplicating a large body across
+`inline_max_body` instructions are inlined (default **30**), since duplicating a large body across
 many call sites costs more bytecode than the saved indirection is worth. Set it with
 `--inline-max-body N` or `inline_max_body = N` in a `--config` file.
 

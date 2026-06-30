@@ -12,6 +12,8 @@ pub mod inline;
 pub mod opcodes;
 pub mod stack;
 pub mod strip;
+#[cfg(feature = "smt")]
+pub mod superopt;
 
 pub use asm::Instr;
 pub(crate) use strip::apply_spans;

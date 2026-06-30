@@ -27,10 +27,13 @@ pub mod fold_shift;
 pub mod guards;
 pub mod inline;
 pub mod involution;
+mod progress;
 #[cfg(test)]
 mod progressive_e2e;
 pub mod recompute;
 pub mod shuffle;
+#[cfg(feature = "smt")]
+pub mod superopt;
 
 /// Feature metadata for the registry, CLI, and config.
 #[derive(Clone, Copy, Debug)]
@@ -47,9 +50,11 @@ pub struct FeatureMeta {
     pub default_enabled: bool,
 }
 
-/// The full registry of available features.
+/// The full registry of available features. The SMT block superoptimizer is present only in an
+/// `smt`-feature build (it pulls in the Z3 dependency).
 pub fn registry() -> Vec<FeatureMeta> {
-    vec![
+    #[cfg_attr(not(feature = "smt"), allow(unused_mut))]
+    let mut metas = vec![
         inline::META,
         guards::META,
         shuffle::META,
@@ -57,7 +62,10 @@ pub fn registry() -> Vec<FeatureMeta> {
         recompute::META,
         fold_shift::META,
         cmpnorm::META,
-    ]
+    ];
+    #[cfg(feature = "smt")]
+    metas.push(superopt::META);
+    metas
 }
 
 /// Find a feature's metadata by key.
@@ -124,6 +132,10 @@ pub fn optimize_with(
         }
         if enabled.contains(&Category::CmpNorm) {
             merge_nonoverlapping(&mut spans, cmpnorm::scan(instrs));
+        }
+        #[cfg(feature = "smt")]
+        if enabled.contains(&Category::Superopt) {
+            merge_nonoverlapping(&mut spans, superopt::scan(instrs));
         }
     }
     if enabled.contains(&Category::Recompute) {

@@ -48,7 +48,7 @@ use crate::core::{Category, Instr, Span};
 mod e2e;
 
 /// Default maximum body size (instructions) a function may have to be inlined.
-pub const DEFAULT_MAX_BODY: usize = 20;
+pub const DEFAULT_MAX_BODY: usize = 30;
 
 pub const META: FeatureMeta = FeatureMeta {
     key: "inline",

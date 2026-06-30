@@ -1,6 +1,6 @@
 [package]
 name = "gasripper"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Super-aggressive gas optimizer for EVM bytecode and assembly"
 license = "MIT"
@@ -25,6 +25,17 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # backend drives the `solc` binary with no Python sidecar (the assembly itself is
 # re-linked by solc via `--import-asm-json`; gasripper writes no linker).
 serde_json = "1"
+# SMT solver for the (opt-in) `superopt` block superoptimizer. OFF by default so the
+# shipped binary and `cargo install` stay pure-std; `gh-release` fetches a prebuilt
+# libz3 at build time (no system Z3, cmake, or C++ toolchain needed). Enable with
+# `--features smt`.
+z3 = { version = "0.20", features = ["gh-release"], optional = true }
+
+[features]
+# The block superoptimizer (`src/features/superopt`): synthesizes a cheaper, SMT-proven
+# equivalent for a pure straight-line block via Z3. Opt-in to keep the default build
+# solver-free.
+smt = ["dep:z3"]
 
 [dev-dependencies]
 # Test-only: a real EVM to prove that stripped creation bytecode still deploys,

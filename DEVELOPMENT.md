@@ -7,12 +7,52 @@ Building, testing, and extending gasripper. User-facing docs: [README.md](README
 ```bash
 cargo build              # debug -> target/debug/gasripper
 cargo build --release    # release -> target/release/gasripper
+cargo install --path .   # install the `gasripper` binary into ~/.cargo/bin
 ```
 
 The shipped binary's runtime dependencies are `clap` (argument parsing and `--help`/`--version`
 generation) and `tracing` / `tracing-subscriber` (diagnostic logging to stderr, level via
 `RUST_LOG`); the config parser and core stay on `std` and build offline. `revm`, declared in
 `[dev-dependencies]`, is used by the e2e tests and is never linked into the binary.
+
+### The `smt` feature (opt-in `superopt` pass)
+
+The SMT block superoptimizer ([`src/features/superopt`](src/features/superopt/README.md)) is gated
+behind the `smt` Cargo feature so the default build stays pure-`std`. Enabling it pulls in the `z3`
+crate, which fetches a prebuilt `libz3` at build time (`gh-release`) — no system Z3, cmake, or C++
+toolchain needed, but the build does need network access on the first compile.
+
+```bash
+cargo build --features smt              # debug binary with the superopt pass
+cargo build --release --features smt    # release binary with the superopt pass
+cargo install --path . --features smt   # install the binary WITH superopt enabled
+cargo run --features smt -- contract.vy --enable superopt --emit-asm
+```
+
+`cargo install --path .` (no `--features`) installs the default solver-free binary; pass
+`--features smt` to bundle Z3 and the `superopt` pass. The pass runs on symbolic input and is enabled
+by default in an `smt` build (toggle with `--enable superopt` / `--disable superopt`).
+
+**Runtime: ship `libz3` next to the installed binary.** `gh-release` links Z3 **dynamically**, so an
+`smt` binary loads `libz3` at run time. `cargo install` copies only the executable into `~/.cargo/bin`,
+not the library, so the installed `gasripper` fails with `error while loading shared libraries:
+libz3.dll` (`.so`/`.dylib` on Linux/macOS). Copy the library the build downloaded next to the binary
+(`~/.cargo/bin` is on `PATH`):
+
+```powershell
+# Windows (run from the repo root after `cargo install --path . --features smt`)
+Copy-Item (Get-ChildItem .\target\release -Recurse -Filter libz3.dll | Select-Object -First 1).FullName "$env:USERPROFILE\.cargo\bin\libz3.dll" -Force
+```
+
+```bash
+# Linux/macOS equivalent (libz3.so / libz3.dylib)
+cp "$(find target/release -name 'libz3.*' | head -1)" ~/.cargo/bin/
+```
+
+Static linking would avoid the runtime library, but the `z3-sys` `vendored` feature needs cmake and a
+C++ toolchain; `gh-release` (prebuilt, dynamic) is used precisely to avoid that, at the cost of this
+one copy step. For development you run `cargo run --features smt` / `cargo test --features smt` from the
+repo, where Cargo already puts `libz3` beside the binary in `target/`, so no copy is needed.
 
 ## Tests
 
@@ -109,6 +149,19 @@ comparison in a loop body to a single `GT` drops call gas 22783 → 22768 (−15
 while shrinking the creation bytecode 203 → 202. It is Vyper-specific: solc selects operand order via
 `DUP` depth and never emits the idiom.
 
+The `superopt` pass (opt-in `smt` feature) has three proofs (`src/features/superopt/e2e.rs`,
+`cargo test --features smt`). (1) *Synthetic, deterministic*: a hand-assembled jumpless runtime
+computes `x + 0 + 0 + 0`; Z3 proves the block is the identity and collapses it to one `PUSH0`, and
+revm returns the same word for **exactly 19 gas less**. It uses **empty calldata** on purpose so the
+EIP-7623 floor is just the 21000 base and the single-shot delta is visible (a non-empty floor would
+mask it — the gotcha the other e2es dodge with a loop). (2) *Real solc 0.8.24*: `unchecked{((a+b)-b)^a}`
+leaves `DUP2 DUP2 ADD SUB DUP2 XOR ADD SWAP1` that Z3 proves equals `POP SWAP1` (block gas 24→5).
+(3) *Real venom 0.4.3*: `(a&b)&(a&b)` leaves a self-`AND` that Z3 proves is `a&b` (block gas 17→10).
+The two real-code proofs assert the **block**-gas drop plus unchanged behavior on revm (not a tx-gas
+drop — these single-shot wins sit under the EIP-7623 floor; on already-optimized output surviving
+redundancy is small and often cold, so a reliable tx-level win is not available — consistent with the
+project's "generic passes win little on optimized output" finding).
+
 **Cross-pass progressive proofs** (`src/features/progressive_e2e.rs`) compile one real contract and
 measure call gas on revm with a growing set of enabled passes, asserting the result is unchanged while
 gas only falls: Vyper guards 22794 → +shuffle 22731 → +involution 22701 → +recompute 22696; Solidity
@@ -128,7 +181,9 @@ constant `PUSH a PUSH b SHL/SHR` folding, `src/features/fold_shift/`), `cmpnorm`
 `SWAP1 LT` → `GT` comparison normalization, `src/features/cmpnorm/`), and `inline` (always-safe
 relocation of a small Vyper `@internal` function with 2+ call sites into its call sites — analysis in
 `core::inline`, orchestration in `src/features/inline/` — the first feature with a numeric parameter,
-`--inline-max-body`) — each a reference module of `mod.rs` + `README.md` + `e2e.rs`. `shuffle`,
+`--inline-max-body`), and — only in an `smt`-feature build — `superopt` (SMT block superoptimization
+via Z3, engine in `core::superopt`, `src/features/superopt/`; the Z3 dep is optional so the default
+binary stays pure-`std`) — each a reference module of `mod.rs` + `README.md` + `e2e.rs`. `shuffle`,
 `involution`, and `recompute` show a pass need not be guard-removal: each owns its own `Category` and
 runs its own `scan` instead of `strip_guards`, and the orchestrator (`features::optimize_with`) runs
 every enabled pass and merges their edit spans (a later pass yields to an earlier one on an overlap,

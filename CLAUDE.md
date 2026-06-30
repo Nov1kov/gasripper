@@ -81,7 +81,7 @@ strictly in English.
 Run the CLI: `./target/debug/gasripper <input>` (or `cargo run -- <input>`). With only an
 input path, all features are on and it prints a strip report. Key flags: `--emit-asm`,
 `--emit-bytecode`, `--disable guards`, `--config <file>`, `--input-kind`, `--list-features`,
-`--inline-max-body <n>` (inline body-size threshold, default 20).
+`--inline-max-body <n>` (inline body-size threshold, default 30).
 
 ## Project documentation
 
@@ -108,7 +108,7 @@ Pipeline: **input frontend → instructions → `features::optimize` (feature-ga
   (no remaining reference + unreachable by fall-through), always-safe dead-code removal),
   `bytecode.rs`, `opcodes.rs`.
 - `src/features/` — one module per gas-reduction pass, each owning its `META` + a rewrite fn + tests.
-  Seven today: `guards` (all revert-guard removal via `strip_guards`; the former `abi`/`math`/`assert`
+  Seven ship by default, plus `superopt` in an `smt`-feature build: `guards` (all revert-guard removal via `strip_guards`; the former `abi`/`math`/`assert`
   split was a leaky opcode-sniff and was merged), `shuffle` (always-safe stack-shuffle rescheduling
   via `core::stack::minimize_shuffle`, symbolic input only), `involution` (always-safe `NOT NOT`
   cancelling, symbolic only), `recompute` (always-safe `OP DUP1` → `OP OP` for a cheap result-invariant
@@ -122,9 +122,13 @@ Pipeline: **input frontend → instructions → `features::optimize` (feature-ga
   (`dethread_tail_return`), DE-THREAD a single-merge `if`/`else` diamond (`dethread_diamond`: deletes
   the merge, joins both arms at a fall-through label, also drops venom's branch-arm double jump),
   relocate any other branching body VERBATIM; length-changing/symbolic; the FIRST
-  feature with a numeric parameter — body-size threshold `inline_max_body`, default 20, via
+  feature with a numeric parameter — body-size threshold `inline_max_body`, default 30, via
   `--inline-max-body`; runs FIRST so its spans take precedence, and optimizes each relocated body with
-  the other passes so it never raises gas). **Which passes actually FIRE on which compiler, the
+  the other passes so it never raises gas), and `superopt` (**opt-in, `smt` Cargo feature**) — SMT block
+  superoptimization via Z3: for a pure straight-line block (`core::superopt`, only stack moves +
+  interpreted arithmetic) it search-and-proves the cheapest gas-equivalent sequence; length-changing/
+  symbolic. The Z3 dep is optional so the default binary stays pure-`std`; gated by `#[cfg(feature = "smt")]`
+  on `Category::Superopt`, the module, the registry entry and the `optimize_with` call. **Which passes actually FIRE on which compiler, the
   venom/solc asm idioms and call/return conventions, the toolchain env vars, and the e2e gotchas live
   in the `gasripper-vyper` and `gasripper-solidity` skills — invoke the matching one before working on
   a language's output.** `features::optimize`/`optimize_with` run the enabled passes and merge their

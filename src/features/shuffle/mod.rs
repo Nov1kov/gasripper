@@ -34,17 +34,10 @@
 
 use std::time::Instant;
 
-use super::FeatureMeta;
+use super::{progress, FeatureMeta};
 use crate::core::asm::Kind;
 use crate::core::stack::{is_shuffle, minimize_shuffle_counted, reschedule_estimate};
 use crate::core::{Category, Instr, Span, apply_spans};
-
-/// Below this window count the pass is silent (small inputs finish instantly); at or
-/// above it, it logs an up-front work estimate and periodic progress.
-const PROGRESS_MIN_WINDOWS: usize = 64;
-
-/// Emit a progress line every this many processed windows.
-const PROGRESS_STEP: usize = 50;
 
 /// Rough search-steps-per-second for the up-front time estimate (debug build, order
 /// of magnitude only — the live progress ETA refines it).
@@ -136,12 +129,13 @@ pub fn scan(instrs: &[Instr]) -> Vec<Span> {
     if windows.is_empty() {
         return Vec::new();
     }
-    let report = windows.len() >= PROGRESS_MIN_WINDOWS;
+    let report = windows.len() >= progress::MIN_ITEMS;
     if report {
         log_estimate(instrs, &windows);
     }
 
     let clock = Instant::now();
+    let mut last = clock;
     let mut spans = Vec::new();
     let mut steps_done = 0u64;
     let mut skipped = 0usize;
@@ -159,9 +153,8 @@ pub fn scan(instrs: &[Instr]) -> Vec<Span> {
             // (None, 0) means the window was too deep and skipped without searching.
             skipped += 1;
         }
-        if report && (idx + 1) % PROGRESS_STEP == 0 {
+        if report && progress::due(&mut last) {
             let frac = (idx + 1) as f64 / windows.len() as f64;
-            let eta = clock.elapsed().mul_f64((1.0 - frac) / frac);
             tracing::info!(
                 "shuffle: {}/{} windows ({:.0}%), {} rescheduled, {} steps, ~{:.1}s left",
                 idx + 1,
@@ -169,7 +162,7 @@ pub fn scan(instrs: &[Instr]) -> Vec<Span> {
                 frac * 100.0,
                 spans.len(),
                 steps_done,
-                eta.as_secs_f64(),
+                progress::eta(clock.elapsed(), frac),
             );
         }
     }
