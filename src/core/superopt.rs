@@ -48,8 +48,19 @@ const CHECK_TIMEOUT_MS: u32 = 2_000;
 fn is_interpreted_op(m: &str) -> bool {
     matches!(
         m,
-        "ADD" | "SUB" | "MUL" | "AND" | "OR" | "XOR" | "NOT" | "ISZERO" | "EQ" | "LT" | "GT"
-            | "SHL" | "SHR"
+        "ADD"
+            | "SUB"
+            | "MUL"
+            | "AND"
+            | "OR"
+            | "XOR"
+            | "NOT"
+            | "ISZERO"
+            | "EQ"
+            | "LT"
+            | "GT"
+            | "SHL"
+            | "SHR"
     )
 }
 
@@ -214,7 +225,10 @@ fn push_value_bv(ins: &Instr) -> Option<BV> {
 /// Parse a PUSH immediate token (`0x..` hex or decimal) into minimal big-endian bytes
 /// (leading zeros trimmed; zero ⇒ empty).
 fn value_bytes(token: &str) -> Option<Vec<u8>> {
-    let raw = if let Some(h) = token.strip_prefix("0x").or_else(|| token.strip_prefix("0X")) {
+    let raw = if let Some(h) = token
+        .strip_prefix("0x")
+        .or_else(|| token.strip_prefix("0X"))
+    {
         let h = if h.len() % 2 == 1 {
             format!("0{h}")
         } else {
@@ -240,7 +254,10 @@ fn token_for(ins: &Instr) -> String {
     if ins.kind == Kind::Push {
         match ins.tokens.get(1).and_then(|t| value_bytes(t)) {
             Some(b) if b.is_empty() => "PUSH0".to_string(),
-            Some(b) => format!("#{}", b.iter().map(|x| format!("{x:02x}")).collect::<String>()),
+            Some(b) => format!(
+                "#{}",
+                b.iter().map(|x| format!("{x:02x}")).collect::<String>()
+            ),
             None => ins.mnem().to_string(),
         }
     } else {
@@ -342,7 +359,9 @@ pub fn optimize_block(run: &[Instr]) -> Option<Vec<Instr>> {
     cfg.set_timeout_msec(CHECK_TIMEOUT_MS as u64);
 
     let chosen = with_z3_config(&cfg, || {
-        let inputs: Vec<BV> = (0..n).map(|i| BV::new_const(format!("in{i}"), WORD)).collect();
+        let inputs: Vec<BV> = (0..n)
+            .map(|i| BV::new_const(format!("in{i}"), WORD))
+            .collect();
         let src_out = symexec(run, &inputs)?;
         let mut best: Option<(u32, usize)> = None;
         for (idx, cand) in cands.iter().enumerate() {

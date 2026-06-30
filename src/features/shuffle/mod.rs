@@ -34,7 +34,7 @@
 
 use std::time::Instant;
 
-use super::{progress, FeatureMeta};
+use super::{FeatureMeta, progress};
 use crate::core::asm::Kind;
 use crate::core::stack::{is_shuffle, minimize_shuffle_counted, reschedule_estimate};
 use crate::core::{Category, Instr, Span, apply_spans};

@@ -119,9 +119,11 @@ impl Backend {
     ) -> Result<String, String> {
         let interp = self.interpreter();
         let mut cmd = Command::new(&interp);
-        cmd.arg(materialize_sidecar(&std::env::temp_dir().join("gasripper"))?)
-            .arg(subcmd)
-            .arg(source);
+        cmd.arg(materialize_sidecar(
+            &std::env::temp_dir().join("gasripper"),
+        )?)
+        .arg(subcmd)
+        .arg(source);
         if let Some(ev) = evm_version {
             cmd.arg("--evm-version").arg(ev);
         }

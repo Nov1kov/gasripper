@@ -426,9 +426,8 @@ mod tests {
         // (both operands loaded fresh from calldata and the call's returndata in memory). It
         // reads external state, not the caller's calldata, so it is a genuine assert — never a
         // redundant input guard — and must survive the strip.
-        let src = format!(
-            "_sym_body JUMPDEST PUSH1 4 CALLDATALOAD PUSH1 0x40 MLOAD LT {REV} JUMPI STOP"
-        );
+        let src =
+            format!("_sym_body JUMPDEST PUSH1 4 CALLDATALOAD PUSH1 0x40 MLOAD LT {REV} JUMPI STOP");
         let (flat, spans) = strip_all(&src);
         assert!(
             spans.is_empty(),

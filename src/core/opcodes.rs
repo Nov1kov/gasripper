@@ -193,8 +193,15 @@ pub fn gas(name: &str) -> Option<u32> {
     if push_immediate_len(name).is_some() {
         return Some(3); // G_verylow
     }
-    if let Some(rest) = name.strip_prefix("DUP").or_else(|| name.strip_prefix("SWAP")) {
-        if rest.parse::<u8>().map(|n| (1..=16).contains(&n)).unwrap_or(false) {
+    if let Some(rest) = name
+        .strip_prefix("DUP")
+        .or_else(|| name.strip_prefix("SWAP"))
+    {
+        if rest
+            .parse::<u8>()
+            .map(|n| (1..=16).contains(&n))
+            .unwrap_or(false)
+        {
             return Some(3); // G_verylow
         }
     }

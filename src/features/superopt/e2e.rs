@@ -20,10 +20,10 @@
 //!    rather than a tx-gas drop.
 
 use super::optimize;
+use crate::core::Category;
 use crate::core::asm::{parse_str, replacement_instr};
 use crate::core::bytecode::{assemble, bytes_to_hex};
 use crate::core::opcodes::gas;
-use crate::core::Category;
 use crate::features::e2e_harness::{deploy_and_call, encode_call, measure, owner_addr, write_temp};
 use crate::sidecar::{Backend, Lang};
 use revm::primitives::U256;
@@ -155,7 +155,10 @@ contract C {
             return;
         }
     };
-    assert!(spans >= 1, "superopt found no block to rewrite in real solc output");
+    assert!(
+        spans >= 1,
+        "superopt found no block to rewrite in real solc output"
+    );
     assert!(
         after < before,
         "the rewritten block(s) must cost less gas: {before} -> {after}"
@@ -177,7 +180,10 @@ contract C {
         r.out_base, r.out_opt,
         "the superoptimized contract must return the same result"
     );
-    tracing::info!("solidity superopt: {shown}; block gas {before} -> {after} (-{})", before - after);
+    tracing::info!(
+        "solidity superopt: {shown}; block gas {before} -> {after} (-{})",
+        before - after
+    );
 }
 
 #[test]
@@ -199,7 +205,10 @@ def f(a: uint256, b: uint256) -> uint256:
             return;
         }
     };
-    assert!(spans >= 1, "superopt found no block to rewrite in real venom output");
+    assert!(
+        spans >= 1,
+        "superopt found no block to rewrite in real venom output"
+    );
     assert!(
         after < before,
         "the rewritten block(s) must cost less gas: {before} -> {after}"
@@ -221,5 +230,8 @@ def f(a: uint256, b: uint256) -> uint256:
         r.out_base, r.out_opt,
         "the superoptimized contract must return the same result"
     );
-    tracing::info!("vyper superopt: {shown}; block gas {before} -> {after} (-{})", before - after);
+    tracing::info!(
+        "vyper superopt: {shown}; block gas {before} -> {after} (-{})",
+        before - after
+    );
 }

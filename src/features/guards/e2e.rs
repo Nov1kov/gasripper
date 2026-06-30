@@ -217,10 +217,16 @@ fn state_guard_preserved(lang: &str, backend: Backend, filename: &str, source: &
     expected[24..].copy_from_slice(&IN_RANGE.to_be_bytes());
 
     // target <= threshold: both builds succeed and agree on the returned value.
-    let (_g_b, out_base) =
-        deploy_and_call(&base.creation_hex, owner_addr(), encode_call(sig, &[IN_RANGE]));
-    let (_g_o, out_opt) =
-        deploy_and_call(&opt.creation_hex, owner_addr(), encode_call(sig, &[IN_RANGE]));
+    let (_g_b, out_base) = deploy_and_call(
+        &base.creation_hex,
+        owner_addr(),
+        encode_call(sig, &[IN_RANGE]),
+    );
+    let (_g_o, out_opt) = deploy_and_call(
+        &opt.creation_hex,
+        owner_addr(),
+        encode_call(sig, &[IN_RANGE]),
+    );
     assert_eq!(
         out_base, expected,
         "{lang}: baseline lost the in-range return value"

@@ -29,7 +29,7 @@
 
 use std::time::Instant;
 
-use super::{progress, FeatureMeta};
+use super::{FeatureMeta, progress};
 use crate::core::opcodes::gas;
 use crate::core::superopt;
 use crate::core::{Category, Instr, Span, apply_spans};
