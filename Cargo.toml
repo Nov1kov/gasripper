@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 description = "Super-aggressive gas optimizer for EVM bytecode and assembly"
 license = "MIT"
+repository = "https://github.com/Nov1kov/gasripper"
+readme = "README.md"
+keywords = ["evm", "gas", "optimizer", "bytecode", "ethereum"]
+categories = ["command-line-utilities", "compilers"]
 
 [[bin]]
 name = "gasripper"
