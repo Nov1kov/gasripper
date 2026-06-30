@@ -111,7 +111,7 @@ while shrinking the creation bytecode 203 → 202. It is Vyper-specific: solc se
 
 **Cross-pass progressive proofs** (`src/features/progressive_e2e.rs`) compile one real contract and
 measure call gas on revm with a growing set of enabled passes, asserting the result is unchanged while
-gas only falls: Vyper guards 22374 → +shuffle 22326 → +involution 22296 → +recompute 22291; Solidity
+gas only falls: Vyper guards 22794 → +shuffle 22731 → +involution 22701 → +recompute 22696; Solidity
 recompute 44801 → +guards 44562 → +foldshift 44550. They exercise the pass-merge precedence
 (inline > guards > shuffle > involution > foldshift > cmpnorm > recompute; an overlapping later span is
 dropped) and lock the guards+foldshift regression: foldshift may fold the `PUSH sel PUSH 0xe0 SHL`

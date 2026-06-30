@@ -13,8 +13,8 @@ use std::collections::HashSet;
 use crate::core::asm::Kind;
 use crate::core::{Category, strip_guards};
 use crate::features::e2e_harness::{
-    assert_preserved_and_smaller, assert_rejects_stranger, assert_win, encode_call, measure,
-    write_temp,
+    assert_preserved_and_smaller, assert_rejects_stranger, assert_win, deploy_and_call,
+    deploy_then_call, encode_call, measure, owner_addr, write_temp,
 };
 use crate::sidecar::{Backend, Lang};
 
@@ -153,6 +153,114 @@ fn vyper_dce_cuts_the_real_revert_handler() {
             .any(|i| i.kind == Kind::Label && i.mnem().contains("revert")),
         "a revert handler label survived DCE in the optimized stream"
     );
+}
+
+// --- State-dependent guard must NOT be stripped ---
+
+// `execute(target)` asserts a stored threshold (set to 5 in the constructor) is at least
+// `target`, then returns `target`. The `>=` lowers to `<state load> LT/GT _sym_*revert* JUMPI`,
+// a pure stack-identity the strip engine wrongly deleted before state reads became a barrier —
+// the storage analog of the reported `assert staticcall balanceOf(self) >= target`.
+const VYPER_STATE: &str = r#"
+threshold: public(uint256)
+
+@deploy
+def __init__():
+    self.threshold = 5
+
+@external
+def execute(target: uint256) -> uint256:
+    assert self.threshold >= target
+    return target
+"#;
+
+const SOLIDITY_STATE: &str = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+contract C {
+    uint256 threshold;
+    constructor() { threshold = 5; }
+    function execute(uint256 target) external view returns (uint256) {
+        require(threshold >= target);
+        return target;
+    }
+}
+"#;
+
+const IN_RANGE: u64 = 3;
+const OVER_RANGE: u64 = 10;
+
+/// Prove on a real EVM that the state-dependent guard in `source` survives the strip: after
+/// stripping guards, the optimized build must still return `IN_RANGE` for an in-range call AND
+/// still revert for the over-threshold call, exactly as the baseline does. A stripped guard
+/// would let the over-threshold call through. Skips on a missing toolchain.
+fn state_guard_preserved(lang: &str, backend: Backend, filename: &str, source: &str) {
+    let path = write_temp(filename, source);
+    let dump = match backend.dump(&path, None) {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!("SKIP {lang} state-guard e2e (toolchain unavailable): {e}");
+            return;
+        }
+    };
+    let only: HashSet<Category> = [Category::Guard].into_iter().collect();
+    let (_opt, spans) = strip_guards(&dump.instrs, &only);
+    let base = backend.build(&path, &[], None).expect("baseline build");
+    let opt = backend.build(&path, &spans, None).expect("optimized build");
+    assert_eq!(
+        base.creation_hex, base.reference_hex,
+        "{lang}: baseline build must match the compiler reference bytecode"
+    );
+
+    let sig = "execute(uint256)";
+    let mut expected = vec![0u8; 32];
+    expected[24..].copy_from_slice(&IN_RANGE.to_be_bytes());
+
+    // target <= threshold: both builds succeed and agree on the returned value.
+    let (_g_b, out_base) =
+        deploy_and_call(&base.creation_hex, owner_addr(), encode_call(sig, &[IN_RANGE]));
+    let (_g_o, out_opt) =
+        deploy_and_call(&opt.creation_hex, owner_addr(), encode_call(sig, &[IN_RANGE]));
+    assert_eq!(
+        out_base, expected,
+        "{lang}: baseline lost the in-range return value"
+    );
+    assert_eq!(
+        out_base, out_opt,
+        "{lang}: optimized output diverged from baseline on an in-range call"
+    );
+
+    // target > threshold: the assert must fire on BOTH builds — the strip must not remove it.
+    let base_over = deploy_then_call(
+        &base.creation_hex,
+        owner_addr(),
+        owner_addr(),
+        encode_call(sig, &[OVER_RANGE]),
+    );
+    assert!(
+        !base_over.is_success(),
+        "{lang}: baseline must revert when target exceeds the stored threshold"
+    );
+    let opt_over = deploy_then_call(
+        &opt.creation_hex,
+        owner_addr(),
+        owner_addr(),
+        encode_call(sig, &[OVER_RANGE]),
+    );
+    assert!(
+        !opt_over.is_success(),
+        "{lang}: the state-dependent threshold assert was stripped — the optimized build let an over-threshold call through"
+    );
+}
+
+#[test]
+fn vyper_state_dependent_guard_not_stripped() {
+    state_guard_preserved("vyper", vy(), "g_vy_state.vy", VYPER_STATE);
+}
+
+#[test]
+fn solidity_state_dependent_guard_not_stripped() {
+    state_guard_preserved("solidity", so(), "g_so_state.sol", SOLIDITY_STATE);
 }
 
 // --- Vyper, trusted-caller (auth) ---

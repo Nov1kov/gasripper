@@ -6,6 +6,11 @@
 //! What is ALWAYS preserved (even when the feature is enabled):
 //!   * authorization — any `run` with `CALLER`/`ORIGIN` (`msg.sender == owner`);
 //!   * side effects — `SSTORE`/`CALL`/`MSTORE`/`LOG*`/... and terminals;
+//!   * state-dependent checks — any `run` reading memory/storage/returndata/external
+//!     or block state (`MLOAD`/`SLOAD`/`STATICCALL` returndata/`BALANCE`/...): their
+//!     truth is a function of chain state, not of the trusted caller's calldata, so
+//!     they are genuine asserts (`assert balanceOf(self) >= target`), never redundant
+//!     input guards;
 //!   * checks that consume their own input (not a stack identity).
 
 use std::collections::HashSet;
@@ -110,6 +115,42 @@ fn is_ctrl(m: &str) -> bool {
     matches!(m, "JUMP" | "JUMPI")
 }
 
+/// Opcodes that read state outside the caller's calldata — memory, storage, returndata,
+/// external/account data, and the block/chain environment. A revert guard whose condition
+/// depends on such a value (`assert balanceOf(self) >= target`, `assert self.threshold >= x`)
+/// is NOT a redundant input-validation guard: its truth is a function of contract/chain state
+/// the trusted caller does not control, so removing it changes live behavior even under a
+/// well-formed call. `CALLDATALOAD`/`CALLDATASIZE` are deliberately excluded — they ARE the
+/// caller's calldata, exactly what the trusted-caller model assumes well-formed.
+fn is_state_read(m: &str) -> bool {
+    matches!(
+        m,
+        "MLOAD"
+            | "SLOAD"
+            | "TLOAD"
+            | "KECCAK256"
+            | "RETURNDATASIZE"
+            | "BALANCE"
+            | "SELFBALANCE"
+            | "EXTCODESIZE"
+            | "EXTCODEHASH"
+            | "BLOCKHASH"
+            | "BLOBHASH"
+            | "COINBASE"
+            | "TIMESTAMP"
+            | "NUMBER"
+            | "PREVRANDAO"
+            | "GASLIMIT"
+            | "CHAINID"
+            | "BASEFEE"
+            | "BLOBBASEFEE"
+            | "GASPRICE"
+            | "GAS"
+            | "MSIZE"
+            | "PC"
+    )
+}
+
 /// Opcode that halts execution: code before it cannot fall through to what follows.
 fn is_terminal(m: &str) -> bool {
     matches!(m, "RETURN" | "REVERT" | "STOP" | "INVALID" | "SELFDESTRUCT")
@@ -128,10 +169,12 @@ fn is_revert_jumpi(instrs: &[Instr], i: usize) -> bool {
 /// and side-effect opcodes.
 ///
 /// A residue strip DROPS stack values, so it must not drop a value derived from
-/// authorization (`CALLER`/`ORIGIN` — would silently remove `msg.sender == owner`)
-/// or from a side effect (e.g. a `CALL`'s success flag — would ignore a failed call).
-/// We conservatively refuse such a strip when its block contains either. Pure-identity
-/// strips drop nothing and are always safe, so they bypass this check.
+/// authorization (`CALLER`/`ORIGIN` — would silently remove `msg.sender == owner`),
+/// a side effect (e.g. a `CALL`'s success flag — would ignore a failed call), or a
+/// read of contract/chain state ([`is_state_read`] — a `MLOAD` of a `STATICCALL`'s
+/// returndata, an `SLOAD` threshold — would drop a genuine state assert). We
+/// conservatively refuse such a strip when its block contains any of these.
+/// Pure-identity strips drop nothing, so the caller bypasses this check for them.
 ///
 /// The scan stops at a `Kind::Label` or a terminal opcode ([`is_terminal`]): both end
 /// the straight-line region reaching `start`. Stopping at a terminal matters for whole
@@ -150,7 +193,7 @@ fn block_clean_for_residue(instrs: &[Instr], start: usize) -> bool {
             if is_terminal(m) {
                 break;
             }
-            if is_auth(m) || is_side(m) {
+            if is_auth(m) || is_side(m) || is_state_read(m) {
                 return false;
             }
         }
@@ -193,7 +236,11 @@ pub fn strip_guards(instrs: &[Instr], enabled: &HashSet<Category>) -> (Vec<Instr
                     }
                     if ins.kind == Kind::Op {
                         let mm = ins.mnem();
-                        if is_side(mm) || is_auth(mm) || (is_ctrl(mm) && k != run.len() - 1) {
+                        if is_side(mm)
+                            || is_auth(mm)
+                            || is_state_read(mm)
+                            || (is_ctrl(mm) && k != run.len() - 1)
+                        {
                             bad = true;
                             break;
                         }
@@ -364,6 +411,44 @@ mod tests {
             "check with STATICCALL was wrongly stripped"
         );
         assert!(flat.contains(&"STATICCALL".to_string()));
+    }
+
+    #[test]
+    fn staticcall_balance_assert_preserved() {
+        // `assert staticcall IERC20(base).balanceOf(self) >= target_balance`: venom lowers
+        // the `>=` to `... MLOAD(returndata) LT _sym_*revert* JUMPI`, a pure stack-identity
+        // (both operands loaded fresh from calldata and the call's returndata in memory). It
+        // reads external state, not the caller's calldata, so it is a genuine assert — never a
+        // redundant input guard — and must survive the strip.
+        let src = format!(
+            "_sym_body JUMPDEST PUSH1 4 CALLDATALOAD PUSH1 0x40 MLOAD LT {REV} JUMPI STOP"
+        );
+        let (flat, spans) = strip_all(&src);
+        assert!(
+            spans.is_empty(),
+            "a balance assert reading STATICCALL returndata (MLOAD) was wrongly stripped"
+        );
+        assert!(
+            flat.contains(&"MLOAD".to_string()) && flat.contains(&"LT".to_string()),
+            "the balance comparison did not survive the strip"
+        );
+    }
+
+    #[test]
+    fn storage_threshold_assert_preserved() {
+        // `assert self.threshold >= target`: lowered to `CALLDATALOAD SLOAD LT _sym_*revert*
+        // JUMPI`. The condition depends on storage state the trusted caller does not control,
+        // so the guard is not redundant and must be kept.
+        let src = format!("_sym_body JUMPDEST PUSH1 4 CALLDATALOAD SLOAD LT {REV} JUMPI STOP");
+        let (flat, spans) = strip_all(&src);
+        assert!(
+            spans.is_empty(),
+            "a storage-threshold assert (reads SLOAD) was wrongly stripped"
+        );
+        assert!(
+            flat.contains(&"SLOAD".to_string()),
+            "the storage load of the threshold assert did not survive the strip"
+        );
     }
 
     #[test]

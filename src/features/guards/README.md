@@ -97,16 +97,21 @@ only behavioral change is "no longer revert on an input the trusted caller never
 A run is removed only if its residue consists solely of input slots (it creates no value that
 survives into live code). A residue strip that *drops* a value is additionally refused when its
 straight-line block contains an auth (`CALLER`/`ORIGIN`) or side-effect opcode, so a `msg.sender`
-check or a call's success flag is never dropped.
+check or a call's success flag is never dropped. A run that itself **reads contract or chain state**
+(`MLOAD`/`SLOAD`/a `STATICCALL`'s returndata/`BALANCE`/…) is refused outright — its condition is not
+a function of calldata, so it is a genuine assert, not a redundant input guard.
 
 **Always preserved** (regardless of enabled features):
 
 - authorization — any run touching `CALLER`/`ORIGIN` (`msg.sender == owner`);
 - side effects — `SSTORE`/`CALL`/`MSTORE`/`LOG*`/`RETURN`/…;
+- state-dependent checks — any run reading memory/storage/returndata/external or block state
+  (`assert balanceOf(self) >= target`, `assert self.threshold >= x`): state the trusted caller does
+  not control, so the guard is not redundant;
 - checks that consume their own input (not a stack identity — possible profit guards);
 - any suffix containing a label or a non-terminal `JUMP(I)`.
 
-The preservation sets `is_auth`/`is_side` live in [`src/core/strip.rs`](../../core/strip.rs).
+The preservation sets `is_auth`/`is_side`/`is_state_read` live in [`src/core/strip.rs`](../../core/strip.rs).
 
 ## Measured (real EVM, revm — `e2e.rs`)
 

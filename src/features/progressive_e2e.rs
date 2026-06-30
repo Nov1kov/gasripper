@@ -91,24 +91,27 @@ fn vyper_gas_falls_as_passes_enable() {
     let path = write_temp("s_vy_progressive.vy", VYPER_CONTRACT);
     let calldata = encode_call("f(uint256,uint256,uint256)", &[3, 5, 5]);
     // f(3,5,5) = sum over i in 0..5 of (a + b + c) with a=~(~3)=3, b=chain.id^2=1, c=3|5|i = 55.
-    // Each pass shaves the same hot loop: guards 22374 -> +shuffle 22326 (-48) -> +involution
-    // 22296 (-30) -> +recompute 22291 (-5). cmpnorm finds nothing here (the comparison's SWAP1
+    // Each pass shaves the same hot loop: guards 22794 -> +shuffle 22731 (-63) -> +involution
+    // 22701 (-30) -> +recompute 22696 (-5). cmpnorm finds nothing here (the comparison's SWAP1
     // is absorbed by a shuffle window — see vyper_cmpnorm_adds_a_step for where it does fire).
+    // guards keeps the `chain.id * chain.id` overflow check (its run reads CHAINID, a state read
+    // the strip refuses — see `is_state_read`), so it strips only the `+` overflow and calldata
+    // guards; recompute still rewrites that multiply's `CHAINID ... DUP1` to a second `CHAINID`.
     let stages = [
         Stage {
             label: "guards",
             categories: &[Category::Guard],
-            gas: 22374,
+            gas: 22794,
         },
         Stage {
             label: "+shuffle",
             categories: &[Category::Guard, Category::Shuffle],
-            gas: 22326,
+            gas: 22731,
         },
         Stage {
             label: "+involution",
             categories: &[Category::Guard, Category::Shuffle, Category::Involution],
-            gas: 22296,
+            gas: 22701,
         },
         Stage {
             label: "+recompute",
@@ -118,7 +121,7 @@ fn vyper_gas_falls_as_passes_enable() {
                 Category::Involution,
                 Category::Recompute,
             ],
-            gas: 22291,
+            gas: 22696,
         },
     ];
     let expected = 55;
