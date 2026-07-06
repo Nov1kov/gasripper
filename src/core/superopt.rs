@@ -288,8 +288,7 @@ fn symexec(prog: &[Instr], inputs: &[BV]) -> Option<Vec<BV>> {
                 let eight = BV::from_u64(8, WORD);
                 let mask = BV::from_u64(0xff, WORD);
                 let shift = last.bvsub(&a).bvmul(&eight);
-                a.bvugt(&last)
-                    .ite(&zero, &b.bvlshr(&shift).bvand(&mask))
+                a.bvugt(&last).ite(&zero, &b.bvlshr(&shift).bvand(&mask))
             }
             // SIGNEXTEND extends from bit 8k+7 (a = k, the byte index); k > 30 is the identity.
             "SIGNEXTEND" => {
@@ -534,9 +533,10 @@ pub fn optimize_block(run: &[Instr], limits: &Limits) -> Option<Vec<Instr>> {
                 Some((net, need)) if net == src_shape.0 && need <= n => {}
                 _ => continue,
             }
-            let refuted = probes.iter().zip(&src_ground).any(|(v, sg)| {
-                symexec(cand, v).is_none_or(|out| !ground_equiv(sg, &out))
-            });
+            let refuted = probes
+                .iter()
+                .zip(&src_ground)
+                .any(|(v, sg)| symexec(cand, v).is_none_or(|out| !ground_equiv(sg, &out)));
             if refuted {
                 continue; // a concrete counterexample disproves the candidate solver-free
             }

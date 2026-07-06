@@ -265,8 +265,18 @@ contract C {
     // The single-shot calls sit on the EIP-7623 calldata floor (equal totals by design); the
     // looped `bench` clears the floor and shows the per-iteration saving (-5800 over 200 turns).
     for (sig, args, expect, gas) in [
-        ("cmp(int256,int256)", vec![7u64, 3], U256::ZERO, (21860, 21860)),
-        ("mul(uint256,uint256)", vec![7, 3], U256::ZERO, (21860, 21860)),
+        (
+            "cmp(int256,int256)",
+            vec![7u64, 3],
+            U256::ZERO,
+            (21860, 21860),
+        ),
+        (
+            "mul(uint256,uint256)",
+            vec![7, 3],
+            U256::ZERO,
+            (21860, 21860),
+        ),
         ("shift(int256)", vec![7], U256::ZERO, (21510, 21510)),
         (
             "bench(uint256,uint256,uint256)",
