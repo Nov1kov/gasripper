@@ -15,8 +15,10 @@
 //! guards = true
 //! ```
 //! Section headers (`[...]`) and comments (`#`) are ignored; lines of the form
-//! `key = true|false` toggle a feature, and `inline_max_body = <int>` sets the inline pass's
-//! body-size threshold (the one numeric parameter).
+//! `key = true|false` toggle a feature, and integer lines set the numeric pass parameters:
+//! `inline_max_body` (inline body-size threshold) and — in an `smt` build — the superopt
+//! search limits `superopt_max_block`, `superopt_max_synth`, `superopt_timeout_ms`,
+//! `superopt_max_checks`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -31,12 +33,12 @@ const INLINE_MAX_BODY_KEY: &str = "inline_max_body";
 #[derive(Clone, Debug)]
 pub struct FeatureConfig {
     enabled: HashMap<String, bool>,
-    inline_max_body: usize,
+    params: features::Params,
 }
 
 impl FeatureConfig {
-    /// Defaults from the feature registry (currently — all enabled) and the default inline
-    /// threshold.
+    /// Defaults from the feature registry (currently — all enabled) and the default pass
+    /// parameters.
     pub fn defaults() -> Self {
         let mut enabled = HashMap::new();
         for f in features::registry() {
@@ -44,7 +46,7 @@ impl FeatureConfig {
         }
         FeatureConfig {
             enabled,
-            inline_max_body: features::inline::DEFAULT_MAX_BODY,
+            params: features::Params::default(),
         }
     }
 
@@ -60,8 +62,15 @@ impl FeatureConfig {
                 .ok_or_else(|| format!("line {}: expected 'key = value'", lineno + 1))?;
             let key = key.trim();
             let val = val.trim();
-            if key == INLINE_MAX_BODY_KEY {
-                self.inline_max_body = val.parse().map_err(|_| {
+            if let Some(slot) = self.numeric(key) {
+                *slot = val.parse().map_err(|_| {
+                    format!("line {}: expected an integer, got '{val}'", lineno + 1)
+                })?;
+                continue;
+            }
+            #[cfg(feature = "smt")]
+            if key == "superopt_timeout_ms" {
+                self.params.superopt.timeout_ms = val.parse().map_err(|_| {
                     format!("line {}: expected an integer, got '{val}'", lineno + 1)
                 })?;
                 continue;
@@ -79,16 +88,38 @@ impl FeatureConfig {
         Ok(())
     }
 
+    /// The `usize` numeric-parameter slot a config/CLI key addresses, if any (the superopt
+    /// timeout is `u32` and handled separately).
+    fn numeric(&mut self, key: &str) -> Option<&mut usize> {
+        match key {
+            INLINE_MAX_BODY_KEY => Some(&mut self.params.inline_max),
+            #[cfg(feature = "smt")]
+            "superopt_max_block" => Some(&mut self.params.superopt.max_block),
+            #[cfg(feature = "smt")]
+            "superopt_max_synth" => Some(&mut self.params.superopt.max_synth),
+            #[cfg(feature = "smt")]
+            "superopt_max_checks" => Some(&mut self.params.superopt.max_checks),
+            _ => None,
+        }
+    }
+
     /// Set the inline pass body-size threshold (instructions).
     #[inline]
     pub fn set_inline_max_body(&mut self, n: usize) {
-        self.inline_max_body = n;
+        self.params.inline_max = n;
     }
 
-    /// The inline pass body-size threshold (instructions).
+    /// Mutable access to the superopt search limits (for the CLI overrides).
+    #[cfg(feature = "smt")]
     #[inline]
-    pub fn inline_max_body(&self) -> usize {
-        self.inline_max_body
+    pub fn superopt(&mut self) -> &mut crate::features::superopt::Limits {
+        &mut self.params.superopt
+    }
+
+    /// The resolved numeric pass parameters.
+    #[inline]
+    pub fn params(&self) -> features::Params {
+        self.params
     }
 
     /// Disable a feature by key. Errors for an unknown key.
@@ -167,7 +198,7 @@ mod tests {
             "every shipped category must be enabled by default"
         );
         assert_eq!(
-            c.inline_max_body(),
+            c.params().inline_max,
             features::inline::DEFAULT_MAX_BODY,
             "the inline threshold must default to the feature's default"
         );
@@ -179,9 +210,36 @@ mod tests {
         let mut c = FeatureConfig::defaults();
         c.apply_file("[features]\ninline_max_body = 35\n").unwrap();
         assert_eq!(
-            c.inline_max_body(),
+            c.params().inline_max,
             35,
             "the config file must set the inline body threshold"
+        );
+    }
+
+    #[cfg(feature = "smt")]
+    #[test]
+    fn config_file_sets_superopt_limits() {
+        // All four superopt search limits are read from the config file.
+        let mut c = FeatureConfig::defaults();
+        c.apply_file(
+            "superopt_max_block = 32\nsuperopt_max_synth = 5\n\
+             superopt_timeout_ms = 250\nsuperopt_max_checks = 64\n",
+        )
+        .unwrap();
+        let s = c.params().superopt;
+        assert_eq!(s.max_block, 32, "the config file must set max_block");
+        assert_eq!(s.max_synth, 5, "the config file must set max_synth");
+        assert_eq!(s.timeout_ms, 250, "the config file must set timeout_ms");
+        assert_eq!(s.max_checks, 64, "the config file must set max_checks");
+    }
+
+    #[cfg(feature = "smt")]
+    #[test]
+    fn non_integer_superopt_limit_errors() {
+        let mut c = FeatureConfig::defaults();
+        assert!(
+            c.apply_file("superopt_max_synth = huge\n").is_err(),
+            "a non-integer superopt limit must be rejected"
         );
     }
 

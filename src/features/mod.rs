@@ -91,14 +91,35 @@ fn merge_nonoverlapping(spans: &mut Vec<Span>, candidates: Vec<Span>) {
     spans.sort_by_key(|s| s.start);
 }
 
-/// Run the enabled passes over `instrs` with the default inline threshold
-/// ([`inline::DEFAULT_MAX_BODY`]). See [`optimize_with`].
+/// Numeric pass parameters, resolved with the same precedence as the feature toggles
+/// (defaults → config file → CLI flags).
+#[derive(Clone, Copy, Debug)]
+pub struct Params {
+    /// Body-size bound for the inline pass.
+    pub inline_max: usize,
+    /// Search limits for the SMT block superoptimizer.
+    #[cfg(feature = "smt")]
+    pub superopt: superopt::Limits,
+}
+
+impl Default for Params {
+    fn default() -> Self {
+        Params {
+            inline_max: inline::DEFAULT_MAX_BODY,
+            #[cfg(feature = "smt")]
+            superopt: superopt::Limits::default(),
+        }
+    }
+}
+
+/// Run the enabled passes over `instrs` with the default [`Params`]. See [`optimize_with`].
 pub fn optimize(instrs: &[Instr], enabled: &HashSet<Category>) -> (Vec<Instr>, Vec<Span>) {
-    optimize_with(instrs, enabled, inline::DEFAULT_MAX_BODY)
+    optimize_with(instrs, enabled, &Params::default())
 }
 
 /// Run the enabled passes over `instrs`, returning the rewritten program and every applied edit
-/// span (on original indices). `inline_max` bounds the body size the inline pass will relocate.
+/// span (on original indices). `params` carries the numeric pass parameters (inline body bound,
+/// superopt search limits).
 ///
 /// Inline runs FIRST so its definition-deletion and call-site spans take precedence: a later
 /// pass cannot rewrite code that inline relocates or deletes. It (like the other length-changing
@@ -112,11 +133,11 @@ pub fn optimize(instrs: &[Instr], enabled: &HashSet<Category>) -> (Vec<Instr>, V
 pub fn optimize_with(
     instrs: &[Instr],
     enabled: &HashSet<Category>,
-    inline_max: usize,
+    params: &Params,
 ) -> (Vec<Instr>, Vec<Span>) {
     let mut spans: Vec<Span> = Vec::new();
     if is_symbolic(instrs) && enabled.contains(&Category::Inline) {
-        merge_nonoverlapping(&mut spans, inline::scan(instrs, enabled, inline_max));
+        merge_nonoverlapping(&mut spans, inline::scan(instrs, enabled, params.inline_max));
     }
     let (_, guard_spans) = strip_guards(instrs, enabled);
     merge_nonoverlapping(&mut spans, guard_spans);
@@ -135,7 +156,7 @@ pub fn optimize_with(
         }
         #[cfg(feature = "smt")]
         if enabled.contains(&Category::Superopt) {
-            merge_nonoverlapping(&mut spans, superopt::scan(instrs));
+            merge_nonoverlapping(&mut spans, superopt::scan(instrs, &params.superopt));
         }
     }
     if enabled.contains(&Category::Recompute) {

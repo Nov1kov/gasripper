@@ -82,6 +82,26 @@ struct Cli {
     #[arg(long = "inline-max-body", value_name = "n")]
     inline_max_body: Option<usize>,
 
+    /// max pure-block length (instructions) the superopt pass analyzes
+    #[cfg(feature = "smt")]
+    #[arg(long = "superopt-max-block", value_name = "n")]
+    superopt_max_block: Option<usize>,
+
+    /// max replacement length (instructions) the superopt pass synthesizes
+    #[cfg(feature = "smt")]
+    #[arg(long = "superopt-max-synth", value_name = "n")]
+    superopt_max_synth: Option<usize>,
+
+    /// per-proof Z3 timeout (milliseconds) for the superopt pass
+    #[cfg(feature = "smt")]
+    #[arg(long = "superopt-timeout-ms", value_name = "ms")]
+    superopt_timeout_ms: Option<u32>,
+
+    /// max solver checks the superopt pass spends per block
+    #[cfg(feature = "smt")]
+    #[arg(long = "superopt-max-checks", value_name = "n")]
+    superopt_max_checks: Option<usize>,
+
     /// show what would be stripped (this is the default)
     #[arg(long)]
     report: bool,
@@ -169,6 +189,21 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
     if let Some(n) = cli.inline_max_body {
         config.set_inline_max_body(n);
     }
+    #[cfg(feature = "smt")]
+    {
+        if let Some(n) = cli.superopt_max_block {
+            config.superopt().max_block = n;
+        }
+        if let Some(n) = cli.superopt_max_synth {
+            config.superopt().max_synth = n;
+        }
+        if let Some(ms) = cli.superopt_timeout_ms {
+            config.superopt().timeout_ms = ms;
+        }
+        if let Some(n) = cli.superopt_max_checks {
+            config.superopt().max_checks = n;
+        }
+    }
 
     let input = cli
         .input
@@ -198,7 +233,7 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
     let loaded = input::load(&input, cli.input_kind, cli.evm_version.as_deref())?;
 
     let enabled = config.enabled_categories();
-    let (optimized, spans) = optimize_with(&loaded.instrs, &enabled, config.inline_max_body());
+    let (optimized, spans) = optimize_with(&loaded.instrs, &enabled, &config.params());
 
     print_report(&loaded, &spans, &config, cli.emit_asm.is_some());
 
@@ -262,7 +297,7 @@ fn emit_creation(input: &str, out: &str, cli: &Cli, config: &FeatureConfig) -> R
     let dump = backend.dump(input, evm)?;
     // 2. Decide what to strip with the enabled categories.
     let enabled = config.enabled_categories();
-    let (_optimized, spans) = optimize_with(&dump.instrs, &enabled, config.inline_max_body());
+    let (_optimized, spans) = optimize_with(&dump.instrs, &enabled, &config.params());
     // 3. Re-assemble creation bytecode with those guards removed/rewritten.
     let built = backend.build(input, &spans, evm)?;
 
@@ -293,7 +328,7 @@ fn report_compiler(
     config: &FeatureConfig,
 ) -> Result<i32, String> {
     let enabled = config.enabled_categories();
-    let (optimized, spans) = optimize_with(&dump.instrs, &enabled, config.inline_max_body());
+    let (optimized, spans) = optimize_with(&dump.instrs, &enabled, &config.params());
 
     println!("source: {} ({input})", backend.label());
     println!("runtime instructions: {}", dump.instrs.len());

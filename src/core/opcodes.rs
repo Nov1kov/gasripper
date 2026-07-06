@@ -185,12 +185,15 @@ pub fn push_immediate_len(name: &str) -> Option<usize> {
 }
 
 /// Static gas cost of the result-invariant arithmetic, comparison and stack opcodes the
-/// block superoptimizer reasons about (`G_base` = 2, `G_verylow` = 3, `G_low` = 5). `None`
-/// for any opcode outside that pure set — a block containing one is not a superopt input,
-/// so its cost is never queried. PUSH1..32/DUP*/SWAP* are generated like in [`tables`].
+/// block superoptimizer reasons about (`G_base` = 2, `G_verylow` = 3, `G_low` = 5,
+/// `G_mid` = 8). `None` for any opcode outside that pure set — a block containing one is
+/// not a superopt input, so its cost is never queried. PUSH1..32/DUP*/SWAP* are generated
+/// like in [`tables`].
 #[cfg(feature = "smt")]
 pub fn gas(name: &str) -> Option<u32> {
-    if push_immediate_len(name).is_some() {
+    // Bare `PUSH` is the solc asm-json literal-push mnemonic (the assembler picks the width);
+    // every sized push costs G_verylow regardless of width.
+    if name == "PUSH" || push_immediate_len(name).is_some() {
         return Some(3); // G_verylow
     }
     if let Some(rest) = name
@@ -210,6 +213,7 @@ pub fn gas(name: &str) -> Option<u32> {
         "ADD" | "SUB" | "NOT" | "LT" | "GT" | "SLT" | "SGT" | "EQ" | "ISZERO" | "AND" | "OR"
         | "XOR" | "BYTE" | "SHL" | "SHR" | "SAR" => 3, // G_verylow
         "MUL" | "DIV" | "SDIV" | "MOD" | "SMOD" | "SIGNEXTEND" => 5, // G_low
+        "ADDMOD" | "MULMOD" => 8, // G_mid
         _ => return None,
     };
     Some(g)

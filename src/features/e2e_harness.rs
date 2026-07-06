@@ -457,7 +457,11 @@ pub fn measure_set_with(
     let dump = backend.dump(source_path, None)?;
 
     // 2. Run the requested categories' passes.
-    let (_optimized, spans) = optimize_with(&dump.instrs, categories, inline_max);
+    let params = crate::features::Params {
+        inline_max,
+        ..Default::default()
+    };
+    let (_optimized, spans) = optimize_with(&dump.instrs, categories, &params);
 
     // 3. Re-assemble baseline and optimized creation bytecode.
     let base = backend.build(source_path, &[], None)?;

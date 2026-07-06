@@ -81,7 +81,9 @@ strictly in English.
 Run the CLI: `./target/debug/gasripper <input>` (or `cargo run -- <input>`). With only an
 input path, all features are on and it prints a strip report. Key flags: `--emit-asm`,
 `--emit-bytecode`, `--disable guards`, `--config <file>`, `--input-kind`, `--list-features`,
-`--inline-max-body <n>` (inline body-size threshold, default 30).
+`--inline-max-body <n>` (inline body-size threshold, default 30), and — in an `smt` build —
+`--superopt-max-block/-max-synth/-timeout-ms/-max-checks` (superopt search limits, defaults
+24/4/500/128).
 
 ## Project documentation
 
@@ -123,7 +125,9 @@ Pipeline: **input frontend → instructions → `features::optimize` (feature-ga
   the merge, joins both arms at a fall-through label, also drops venom's branch-arm double jump),
   relocate any other branching body VERBATIM; length-changing/symbolic; the FIRST
   feature with a numeric parameter — body-size threshold `inline_max_body`, default 30, via
-  `--inline-max-body`; runs FIRST so its spans take precedence, and optimizes each relocated body with
+  `--inline-max-body`; `superopt` adds four more (`superopt_max_block/max_synth/timeout_ms/max_checks`
+  — the `core::superopt::Limits` carried in `features::Params`); runs FIRST so its spans take
+  precedence, and optimizes each relocated body with
   the other passes so it never raises gas), and `superopt` (**opt-in, `smt` Cargo feature**) — SMT block
   superoptimization via Z3: for a pure straight-line block (`core::superopt`, only stack moves +
   interpreted arithmetic) it search-and-proves the cheapest gas-equivalent sequence; length-changing/
@@ -135,7 +139,8 @@ Pipeline: **input frontend → instructions → `features::optimize` (feature-ga
   edit spans via `merge_nonoverlapping` (a later pass yields to an earlier one on overlap). Add a pass:
   a module here, register its `META` in `features::registry()`, and run it from `features::optimize_with`.
 - `src/config.rs` — `FeatureConfig` with precedence defaults → config file → CLI; `enabled_categories()`
-  feeds the engine; the one numeric parameter (`inline_max_body`) is read alongside the feature toggles.
+  feeds the engine; the numeric parameters (`inline_max_body`, the `superopt_*` limits) are read
+  alongside the feature toggles into `features::Params`.
 - `src/input/` — frontends produce `Loaded { instrs, symbolic, kind }`. `raw_asm`/`bytecode` are
   supported; `vyper`/`solidity` shell out to the compiler and are **experimental**.
 
