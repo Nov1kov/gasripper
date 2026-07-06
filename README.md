@@ -7,7 +7,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A Rust CLI tool that maximally optimizes an EVM contract for gas. The goal is to **not change
-execution logic**. Seven passes ship today — see the [feature matrix](#features) below.
+execution logic**. Seven passes ship by default, plus an opt-in SMT superoptimizer — see the
+[feature matrix](#features) below.
 
 ## Results on a real contract
 
@@ -19,30 +20,32 @@ still removes gas the compiler cannot, and the runtime bytecode only gets **smal
 gasripper shaves off (`█` kept · `▒` saved):**
 
 ```text
-⛽ gas / call    329,869 → 328,639     saved 1,230   (−0.37%)
+⛽ gas / call    329,870 → 328,611     saved 1,259   (−0.38%)
    █████████████████████████████████████████████████▒   ← saved < 1 char, see the zoom below
 
-📦 bytecode      12,396 B → 11,468 B   saved 928 B   (−7.5%)
+📦 bytecode      12,396 B → 11,426 B   saved 970 B   (−7.8%)
    ██████████████████████████████████████████████▒▒▒▒
 ```
 
-**Magnified — that thin gas slice (1,230 / call) is almost all one pass; the rest are free extras
+**Magnified — that thin gas slice (1,259 / call) is almost all one pass; the rest are extras
 on top:**
 
 ```mermaid
 pie showData
-  title Gas saved per call (1,230 = −0.37%), by feature
-  "guards" : 1116
-  "inline" : 98
-  "others" : 17
+  title Gas saved per call (1,259 = −0.38%), by feature
+  "guards" : 1115
+  "inline" : 97
+  "superopt" : 29
+  "others" : 18
 ```
 
 | Feature | Gas saved / call | Share of the saving | vs. full call |
 |---|---:|---:|---:|
-| `guards` | −1,116 | 90.7% | −0.34% |
-| `inline` | −98 | 8.0% | −0.03% |
-| `others` | −17 | 1.4% | −0.005% |
-| **total** | **−1,230** | **100%** | **−0.37%** |
+| `guards` | −1,115 | 88.6% | −0.34% |
+| `inline` | −97 | 7.7% | −0.03% |
+| `superopt` (Z3) | −29 | 2.3% | −0.009% |
+| `others` | −18 | 1.4% | −0.005% |
+| **total** | **−1,259** | **100%** | **−0.38%** |
 
 The bytecode shrinks **even with inlining enabled** — the optimizer is a net reduction in size,
 not a trade.

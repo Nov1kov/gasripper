@@ -78,28 +78,36 @@ struct Cli {
     #[arg(long = "evm-version", value_name = "v")]
     evm_version: Option<String>,
 
-    /// max internal-function body size (instructions) the inline pass relocates
-    #[arg(long = "inline-max-body", value_name = "n")]
+    // The numeric-parameter flags stay `Option` so an absent flag does not clobber a config-file
+    // value (defaults -> file -> CLI); the shown default therefore comes from the pass's own
+    // constant via `help`, not from clap's `default_value_t` (which would always report Some).
+    #[arg(long = "inline-max-body", value_name = "n",
+          help = format!("max internal-function body size (instructions) the inline pass \
+                          relocates [default: {}]", features::inline::DEFAULT_MAX_BODY))]
     inline_max_body: Option<usize>,
 
-    /// max pure-block length (instructions) the superopt pass analyzes
     #[cfg(feature = "smt")]
-    #[arg(long = "superopt-max-block", value_name = "n")]
+    #[arg(long = "superopt-max-block", value_name = "n",
+          help = format!("max pure-block length (instructions) the superopt pass analyzes \
+                          [default: {}]", features::superopt::Limits::default().max_block))]
     superopt_max_block: Option<usize>,
 
-    /// max replacement length (instructions) the superopt pass synthesizes
     #[cfg(feature = "smt")]
-    #[arg(long = "superopt-max-synth", value_name = "n")]
+    #[arg(long = "superopt-max-synth", value_name = "n",
+          help = format!("max replacement length (instructions) the superopt pass synthesizes \
+                          [default: {}]", features::superopt::Limits::default().max_synth))]
     superopt_max_synth: Option<usize>,
 
-    /// per-proof Z3 timeout (milliseconds) for the superopt pass
     #[cfg(feature = "smt")]
-    #[arg(long = "superopt-timeout-ms", value_name = "ms")]
+    #[arg(long = "superopt-timeout-ms", value_name = "ms",
+          help = format!("per-proof Z3 timeout (milliseconds) for the superopt pass \
+                          [default: {}]", features::superopt::Limits::default().timeout_ms))]
     superopt_timeout_ms: Option<u32>,
 
-    /// max solver checks the superopt pass spends per block
     #[cfg(feature = "smt")]
-    #[arg(long = "superopt-max-checks", value_name = "n")]
+    #[arg(long = "superopt-max-checks", value_name = "n",
+          help = format!("max solver checks the superopt pass spends per block [default: {}]",
+                         features::superopt::Limits::default().max_checks))]
     superopt_max_checks: Option<usize>,
 
     /// show what would be stripped (this is the default)
